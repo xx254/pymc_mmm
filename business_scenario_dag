@@ -1,0 +1,18 @@
+// Business Scenario DAG
+digraph {
+	C [label=Christmas style=dashed]
+	X1 [label="Marketing X1"]
+	X2 [label="Marketing X2"]
+	I [label="Competitor Offers" style=dashed]
+	G [label="Market Growth" style=dashed]
+	T [label=Target]
+	C -> X1 [style=dashed]
+	C -> X2 [style=dashed]
+	I -> X2 [style=dashed]
+	X1 -> X2
+	C -> T [style=dashed]
+	X1 -> T
+	X2 -> T
+	I -> T [style=dashed]
+	G -> T [style=dashed]
+}
