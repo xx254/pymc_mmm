@@ -15,10 +15,38 @@ import ReactFlow, {
   EdgeMouseHandler,
   ReactFlowInstance,
 } from 'reactflow';
+
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  Filler
+} from 'chart.js';
+import { Line, Scatter, Bar } from 'react-chartjs-2';
+
 import 'reactflow/dist/style.css';
 import './App.css';
 
-// 节点类型定义
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  Filler
+);
+
+// Node type definition
 interface NodeTemplate {
   type: string;
   label: string;
@@ -26,7 +54,7 @@ interface NodeTemplate {
   description: string;
 }
 
-// DAG导出格式
+// DAG export format
 interface DAGExport {
   nodes: Array<{
     id: string;
@@ -42,11 +70,61 @@ interface DAGExport {
   }>;
 }
 
-// 训练结果接口
+// Training result interface
 interface TrainingResult {
   status: 'success' | 'error';
   message: string;
-  model_summary?: any;
+  model_summary?: {
+    dag_type?: string;
+    nodes_count?: number;
+    edges_count?: number;
+    treatment_variables?: string[];
+    outcome_variables?: string[];
+    control_variables?: string[];
+    fit_quality?: {
+      r2_score?: number;
+      mape?: number;
+      mae?: number;
+      rmse?: number;
+      sample_size?: number;
+    };
+    data_info?: {
+      prediction_mean?: number;
+      prediction_std?: number;
+      actual_mean?: number;
+      actual_std?: number;
+    };
+    plot_available?: boolean;
+    plot_path?: string;
+    chart_data?: {
+      actual_vs_predicted?: {
+        actual: number[];
+        predicted: number[];
+      };
+      time_series?: {
+        dates: (string | number)[];
+        actual: number[];
+        predicted: number[];
+        confidence_upper: number[];
+        confidence_lower: number[];
+      };
+      media_contribution?: {
+        dates: (string | number)[];
+        x1: {
+          predicted_mean: number[];
+          confidence_upper: number[];
+          confidence_lower: number[];
+          real_effect: number[];
+        };
+        x2: {
+          predicted_mean: number[];
+          confidence_upper: number[];
+          confidence_lower: number[];
+          real_effect: number[];
+        };
+      };
+    };
+  };
   convergence_info?: any;
   plots?: string[];
   errorDetails?: string;
@@ -65,7 +143,7 @@ interface TrainingResult {
 const nodeTemplates: NodeTemplate[] = [
   {
     type: 'treatment',
-    label: '治疗变量',
+    label: 'Treatment',
     style: {
       background: '#2196f3',
       color: 'white',
@@ -75,11 +153,11 @@ const nodeTemplates: NodeTemplate[] = [
       fontSize: '12px',
       fontWeight: 'bold',
     },
-    description: '营销渠道、广告投放等'
+    description: 'Marketing channels, ad campaigns, etc.'
   },
   {
     type: 'outcome',
-    label: '结果变量',
+    label: 'Outcome',
     style: {
       background: '#f44336',
       color: 'white',
@@ -89,11 +167,11 @@ const nodeTemplates: NodeTemplate[] = [
       fontSize: '14px',
       fontWeight: 'bold',
     },
-    description: '销售额、转化率等'
+    description: 'Sales, conversion rate, etc.'
   },
   {
     type: 'confounder',
-    label: '混淆变量',
+    label: 'Confounder',
     style: {
       background: '#ff9800',
       color: 'white',
@@ -103,11 +181,11 @@ const nodeTemplates: NodeTemplate[] = [
       fontSize: '12px',
       fontWeight: 'bold',
     },
-    description: '季节性、竞争对手等'
+    description: 'Seasonality, competitors, etc.'
   },
   {
     type: 'unobserved',
-    label: '未观测变量',
+    label: 'Unobserved',
     style: {
       background: '#9c27b0',
       color: 'white',
@@ -117,11 +195,11 @@ const nodeTemplates: NodeTemplate[] = [
       fontSize: '12px',
       fontWeight: 'bold',
     },
-    description: '隐藏的影响因素'
+    description: 'Hidden confounding factors'
   },
   {
     type: 'mediator',
-    label: '中介变量',
+    label: 'Mediator',
     style: {
       background: '#4caf50',
       color: 'white',
@@ -131,11 +209,11 @@ const nodeTemplates: NodeTemplate[] = [
       fontSize: '12px',
       fontWeight: 'bold',
     },
-    description: '传递效应的中间变量'
+    description: 'Intermediate variables for effects'
   },
 ];
 
-// DAG节点数据 - 来自CausalMMMTutorial
+// DAG node data - from CausalMMMTutorial
 const businessScenarioNodes: Node[] = [
   {
     id: 'christmas',
@@ -157,7 +235,7 @@ const businessScenarioNodes: Node[] = [
     id: 'x1',
     type: 'default',
     position: { x: 100, y: 150 },
-    data: { label: 'X1 (社交媒体)' },
+    data: { label: 'X1 (Social Media)' },
     style: {
       background: '#2196f3',
       color: 'white',
@@ -174,7 +252,7 @@ const businessScenarioNodes: Node[] = [
     id: 'x2',
     type: 'default',
     position: { x: 400, y: 150 },
-    data: { label: 'X2 (搜索引擎)' },
+    data: { label: 'X2 (Search Engine)' },
     style: {
       background: '#9c27b0',
       color: 'white',
@@ -305,7 +383,7 @@ const businessScenarioEdges: Edge[] = [
   },
 ];
 
-// 简化版DAG
+        // Simplified DAG
 const simpleDagNodes: Node[] = [
   {
     id: 'x1_simple',
@@ -337,7 +415,7 @@ const simpleDagNodes: Node[] = [
     id: 'y_simple',
     type: 'default',
     position: { x: 200, y: 250 },
-    data: { label: 'Y (销售额)' },
+    data: { label: 'Y (Sales)' },
     style: {
       background: '#f44336',
       color: 'white',
@@ -366,7 +444,7 @@ const simpleDagEdges: Edge[] = [
   },
 ];
 
-let nodeId = 1000; // 用于生成新节点的ID
+let nodeId = 1000; // For generating new node IDs
 
 function App() {
   const [dagType, setDagType] = useState<'business' | 'simple' | 'custom'>('business');
@@ -404,7 +482,7 @@ function App() {
     setTrainingResult(null);
   };
 
-  // 导出DAG结构
+  // Export DAG structure
   const exportDAG = (): DAGExport => {
     return {
       nodes: nodes.map(node => ({
@@ -422,11 +500,11 @@ function App() {
     };
   };
 
-  // 生成Graphviz DOT格式的DAG字符串
+  // Generate Graphviz DOT format DAG string
   const generateDOTString = (): string => {
     let dotString = "digraph {\n";
     
-    // 添加边（关系）
+    // Add edges (relationships)
     edges.forEach(edge => {
       dotString += `  ${edge.source} -> ${edge.target};\n`;
     });
@@ -435,10 +513,10 @@ function App() {
     return dotString;
   };
 
-  // 训练模型
+  // Train model
   const trainModel = async () => {
     if (nodes.length === 0) {
-      alert('请先创建DAG结构！');
+      alert('Please create DAG structure first!');
       return;
     }
 
@@ -466,18 +544,18 @@ function App() {
       }
 
       const result: TrainingResult = await response.json();
-      console.log('训练结果:', result); // 添加调试日志
+      console.log('Training result:', result); // Add debug log
       setTrainingResult(result);
 
     } catch (error) {
-      console.error('训练模型时出错:', error);
+      console.error('Error training model:', error);
       
-      let errorMessage = '未知错误';
+      let errorMessage = 'Unknown error';
       let errorDetails = '';
       
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        errorMessage = '无法连接到后端服务器';
-        errorDetails = '请确保API服务器正在运行 (python api_server.py)';
+        errorMessage = 'Cannot connect to backend server';
+        errorDetails = 'Please ensure API server is running (python api_server.py)';
       } else if (error instanceof Error) {
         errorMessage = error.message;
         errorDetails = error.stack || '';
@@ -485,7 +563,7 @@ function App() {
       
       setTrainingResult({
         status: 'error',
-        message: `训练失败: ${errorMessage}`,
+        message: `Training failed: ${errorMessage}`,
         errorDetails: errorDetails,
         fullError: JSON.stringify(error, Object.getOwnPropertyNames(error))
       });
@@ -494,7 +572,7 @@ function App() {
     }
   };
 
-  // 拖拽添加节点
+  // Drag and drop to add nodes
   const onDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -521,7 +599,7 @@ function App() {
         id: `${type}_${nodeId++}`,
         type: 'default',
         position,
-        data: { label: `新${template.label}` },
+        data: { label: `New ${template.label}` },
         style: template.style,
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
@@ -537,27 +615,27 @@ function App() {
     event.dataTransfer.effectAllowed = 'move';
   };
 
-  // 选择节点
+  // Select nodes
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
     event.stopPropagation();
     setSelectedNodes([node.id]);
     setSelectedEdges([]);
   }, []);
 
-  // 选择边
+  // Select edges
   const onEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
     event.stopPropagation();
     setSelectedEdges([edge.id]);
     setSelectedNodes([]);
   }, []);
 
-  // 清除选择
+  // Clear selection
   const onPaneClick = useCallback(() => {
     setSelectedNodes([]);
     setSelectedEdges([]);
   }, []);
 
-  // 删除选中的元素
+  // Delete selected elements
   const deleteSelected = useCallback(() => {
     if (selectedNodes.length > 0) {
       setNodes((nds) => nds.filter((node) => !selectedNodes.includes(node.id)));
@@ -572,14 +650,14 @@ function App() {
     }
   }, [selectedNodes, selectedEdges, setNodes, setEdges]);
 
-  // 键盘事件处理
+  // Keyboard event handling
   const onKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key === 'Delete' || event.key === 'Backspace') {
       deleteSelected();
     }
   }, [deleteSelected]);
 
-  // 添加键盘监听
+  // Add keyboard listener
   React.useEffect(() => {
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -587,7 +665,7 @@ function App() {
     };
   }, [onKeyDown]);
 
-  // 清空画布
+  // Clear canvas
   const clearCanvas = () => {
     setNodes([]);
     setEdges([]);
@@ -598,7 +676,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      {/* 侧边栏 */}
+      {/* Sidebar */}
       <div style={{
         width: '300px',
         background: 'white',
@@ -607,11 +685,11 @@ function App() {
         overflow: 'auto',
         boxShadow: '2px 0 4px rgba(0,0,0,0.1)'
       }}>
-        <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>因果DAG编辑器</h3>
+        <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>Causal DAG Editor</h3>
         
-        {/* DAG模板选择 */}
+        {/* DAG template selection */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>模板选择</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Template Selection</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={() => switchDAG('business')}
@@ -625,7 +703,7 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              业务场景DAG
+              Business Scenario DAG
             </button>
             <button
               onClick={() => switchDAG('simple')}
@@ -639,7 +717,7 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              简化DAG
+              Simplified DAG
             </button>
             <button
               onClick={() => switchDAG('custom')}
@@ -653,16 +731,16 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              自定义DAG
+              Custom DAG
             </button>
           </div>
         </div>
 
-        {/* 节点工具箱 */}
+        {/* Node toolbox */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>节点工具箱</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Node Toolbox</h4>
           <p style={{ fontSize: '11px', color: '#888', margin: '0 0 15px 0' }}>
-            拖拽下方节点到画布中
+            Drag nodes below to canvas
           </p>
           {nodeTemplates.map((template) => (
             <div
@@ -689,9 +767,9 @@ function App() {
           ))}
         </div>
 
-        {/* 操作按钮 */}
+        {/* Operation buttons */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>操作</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Operations</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={deleteSelected}
@@ -706,7 +784,7 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              删除选中 (Delete键)
+              Delete Selected (Delete Key)
             </button>
             <button
               onClick={clearCanvas}
@@ -720,14 +798,14 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              清空画布
+              Clear Canvas
             </button>
           </div>
         </div>
 
-        {/* DAG导出和模型训练 */}
+        {/* DAG export and model training */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>模型训练</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Model Training</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={() => setShowDAGExport(!showDAGExport)}
@@ -741,7 +819,7 @@ function App() {
                 fontSize: '12px'
               }}
             >
-              {showDAGExport ? '隐藏' : '显示'} DAG结构
+              {showDAGExport ? 'Hide' : 'Show'} DAG Structure
             </button>
             <button
               onClick={trainModel}
@@ -757,14 +835,14 @@ function App() {
                 fontWeight: 'bold'
               }}
             >
-              {isTraining ? '训练中...' : '🚀 训练因果模型'}
+              {isTraining ? 'Training...' : '🚀 Train Causal Model'}
             </button>
           </div>
 
-          {/* DAG导出显示 */}
+          {/* DAG export display */}
           {showDAGExport && (
             <div style={{ marginTop: '10px' }}>
-              <h5 style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>DOT格式:</h5>
+              <h5 style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>DOT Format:</h5>
               <textarea
                 value={generateDOTString()}
                 readOnly
@@ -782,7 +860,7 @@ function App() {
             </div>
           )}
 
-          {/* 训练结果显示 */}
+          {/* Training result display */}
           {trainingResult && (
             <div style={{ 
               marginTop: '15px', 
@@ -796,7 +874,7 @@ function App() {
                 fontSize: '12px', 
                 color: trainingResult.status === 'success' ? '#2e7d32' : '#c62828' 
               }}>
-                训练结果
+                Training Result
               </h5>
               <p style={{ 
                 margin: 0, 
@@ -815,25 +893,25 @@ function App() {
                   borderRadius: '4px',
                   border: '1px solid #ffcdd2'
                 }}>
-                  <strong>详细错误信息:</strong>
+                  <strong>Detailed Error Information:</strong>
                   {trainingResult.error_details && (
                     <div style={{ marginTop: '5px' }}>
-                      <div><strong>错误类型:</strong> {trainingResult.error_details.error_type}</div>
-                      <div><strong>错误消息:</strong> {trainingResult.error_details.error_message}</div>
+                      <div><strong>Error Type:</strong> {trainingResult.error_details.error_type}</div>
+                      <div><strong>Error Message:</strong> {trainingResult.error_details.error_message}</div>
                       {trainingResult.error_details.dag_type && (
-                        <div><strong>DAG类型:</strong> {trainingResult.error_details.dag_type}</div>
+                        <div><strong>DAG Type:</strong> {trainingResult.error_details.dag_type}</div>
                       )}
                       {trainingResult.error_details.nodes_count !== undefined && (
-                        <div><strong>节点数:</strong> {trainingResult.error_details.nodes_count}</div>
+                        <div><strong>Node Count:</strong> {trainingResult.error_details.nodes_count}</div>
                       )}
                       {trainingResult.error_details.edges_count !== undefined && (
-                        <div><strong>边数:</strong> {trainingResult.error_details.edges_count}</div>
+                        <div><strong>Edge Count:</strong> {trainingResult.error_details.edges_count}</div>
                       )}
-                      <div><strong>因果MMM可用:</strong> {trainingResult.error_details.causal_mmm_available ? '是' : '否'}</div>
+                      <div><strong>Causal MMM Available:</strong> {trainingResult.error_details.causal_mmm_available ? 'Yes' : 'No'}</div>
                     </div>
                   )}
                   <details style={{ marginTop: '8px' }}>
-                    <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>技术详情 (点击展开)</summary>
+                    <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>Technical Details (Click to expand)</summary>
                     <pre style={{ 
                       fontSize: '8px', 
                       margin: '5px 0 0 0', 
@@ -851,37 +929,385 @@ function App() {
               )}
               {trainingResult.status === 'success' && trainingResult.model_summary && (
                 <div style={{ marginTop: '8px', fontSize: '10px', color: '#666' }}>
-                  <strong>模型信息:</strong>
-                  <pre style={{ 
-                    fontSize: '9px', 
-                    margin: '5px 0 0 0', 
-                    whiteSpace: 'pre-wrap',
-                    maxHeight: '100px',
-                    overflow: 'auto'
-                  }}>
-                    {JSON.stringify(trainingResult.model_summary, null, 2)}
-                  </pre>
+                  <strong>Model Information:</strong>
+                  <div style={{ margin: '5px 0', fontSize: '10px' }}>
+                    <div><strong>DAG Type:</strong> {trainingResult.model_summary.dag_type}</div>
+                    <div><strong>Node Count:</strong> {trainingResult.model_summary.nodes_count}</div>
+                    <div><strong>Edge Count:</strong> {trainingResult.model_summary.edges_count}</div>
+                    {trainingResult.model_summary.treatment_variables && (
+                      <div><strong>Treatment Variables:</strong> {trainingResult.model_summary.treatment_variables.join(', ')}</div>
+                    )}
+                    {trainingResult.model_summary.outcome_variables && (
+                      <div><strong>Outcome Variables:</strong> {trainingResult.model_summary.outcome_variables.join(', ')}</div>
+                    )}
+                  </div>
+                  
+                  {trainingResult.model_summary.fit_quality && (
+                    <div style={{ 
+                      marginTop: '8px', 
+                      padding: '8px', 
+                      backgroundColor: '#e8f5e8', 
+                      borderRadius: '4px',
+                      border: '1px solid #c8e6c9'
+                    }}>
+                      <strong style={{ color: '#2e7d32' }}>🎯 Model Fit Quality:</strong>
+                      <div style={{ marginTop: '4px', fontSize: '9px' }}>
+                        <div><strong>R² Score:</strong> {trainingResult.model_summary.fit_quality.r2_score?.toFixed(4)} 
+                          <span style={{ color: '#666', marginLeft: '5px' }}>
+                            ({trainingResult.model_summary.fit_quality.r2_score && trainingResult.model_summary.fit_quality.r2_score > 0.8 ? 'Excellent' : 
+                              trainingResult.model_summary.fit_quality.r2_score && trainingResult.model_summary.fit_quality.r2_score > 0.6 ? 'Good' : 'Fair'})
+                          </span>
+                        </div>
+                        <div><strong>MAPE:</strong> {(trainingResult.model_summary.fit_quality.mape && (trainingResult.model_summary.fit_quality.mape * 100).toFixed(2))}%
+                          <span style={{ color: '#666', marginLeft: '5px' }}>
+                            ({trainingResult.model_summary.fit_quality.mape && trainingResult.model_summary.fit_quality.mape < 0.1 ? 'Excellent' : 
+                              trainingResult.model_summary.fit_quality.mape && trainingResult.model_summary.fit_quality.mape < 0.2 ? 'Good' : 'Fair'})
+                          </span>
+                        </div>
+                        <div><strong>MAE:</strong> {trainingResult.model_summary.fit_quality.mae?.toFixed(2)}</div>
+                        <div><strong>RMSE:</strong> {trainingResult.model_summary.fit_quality.rmse?.toFixed(2)}</div>
+                        <div><strong>Sample Size:</strong> {trainingResult.model_summary.fit_quality.sample_size}</div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {trainingResult.model_summary.data_info && (
+                    <div style={{ 
+                      marginTop: '6px', 
+                      padding: '6px', 
+                      backgroundColor: '#f3e5f5', 
+                      borderRadius: '4px',
+                      border: '1px solid #e1bee7'
+                    }}>
+                      <strong style={{ color: '#7b1fa2' }}>📊 Data Statistics:</strong>
+                      <div style={{ marginTop: '3px', fontSize: '9px' }}>
+                        <div><strong>Actual Values:</strong> Mean={trainingResult.model_summary.data_info.actual_mean?.toFixed(2)}, Std={trainingResult.model_summary.data_info.actual_std?.toFixed(2)}</div>
+                        <div><strong>Predicted Values:</strong> Mean={trainingResult.model_summary.data_info.prediction_mean?.toFixed(2)}, Std={trainingResult.model_summary.data_info.prediction_std?.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Dynamic Charts */}
+                  {trainingResult.model_summary?.chart_data ? (
+                    <div style={{ marginTop: '10px' }}>
+                      <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#333' }}>📊 Model Evaluation Charts</h4>
+                      
+                      {/* Time Series Chart */}
+                      {trainingResult.model_summary?.chart_data?.time_series && (
+                        <div style={{ marginBottom: '20px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+                          <h5 style={{ margin: '0 0 10px 0', fontSize: '12px', color: '#666' }}>
+                            Time Series Fit (R² = {trainingResult.model_summary.fit_quality?.r2_score?.toFixed(3)})
+                          </h5>
+                          <div style={{ height: '300px' }}>
+                            <Line
+                                                             data={{
+                                 labels: trainingResult.model_summary?.chart_data?.time_series?.dates || [],
+                                 datasets: [
+                                   {
+                                     label: 'Observed',
+                                     data: trainingResult.model_summary?.chart_data?.time_series?.actual || [],
+                                    borderColor: '#000000',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                                                     {
+                                     label: 'Predicted',
+                                     data: trainingResult.model_summary?.chart_data?.time_series?.predicted || [],
+                                    borderColor: '#1976d2',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 1.5,
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                                                     {
+                                     label: '95% HDI',
+                                     data: trainingResult.model_summary?.chart_data?.time_series?.confidence_upper || [],
+                                    borderColor: 'rgba(25, 118, 210, 0.2)',
+                                    backgroundColor: 'rgba(25, 118, 210, 0.1)',
+                                    borderWidth: 0,
+                                    fill: '+1',
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                                                     {
+                                     label: '',
+                                     data: trainingResult.model_summary?.chart_data?.time_series?.confidence_lower || [],
+                                    borderColor: 'rgba(25, 118, 210, 0.2)',
+                                    backgroundColor: 'rgba(25, 118, 210, 0.1)',
+                                    borderWidth: 0,
+                                    fill: false,
+                                    pointRadius: 0,
+                                    tension: 0.1,
+                                    pointHoverRadius: 0,
+                                    pointHitRadius: 0
+                                  }
+                                ]
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  title: {
+                                    display: true,
+                                    text: 'Estimated Target Variable Over Time',
+                                    font: { size: 14, weight: 'bold' }
+                                  },
+                                  legend: {
+                                    display: true,
+                                    position: 'top',
+                                    labels: {
+                                      filter: (legendItem) => legendItem.text !== ''
+                                    }
+                                  }
+                                },
+                                scales: {
+                                  x: {
+                                    title: {
+                                      display: true,
+                                      text: 'Days'
+                                    }
+                                  },
+                                  y: {
+                                    title: {
+                                      display: true,
+                                      text: 'Target Variable'
+                                    }
+                                  }
+                                }
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Media Contribution Recovery Chart */}
+                      {trainingResult.model_summary?.chart_data?.media_contribution && (
+                        <div style={{ marginBottom: '20px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+                          <h5 style={{ margin: '0 0 10px 0', fontSize: '12px', color: '#666' }}>Media Contribution Recovery</h5>
+                          
+                          {/* X1 (Social Media) Chart */}
+                          <div style={{ height: '300px', marginBottom: '20px' }}>
+                            <Line
+                              data={{
+                                labels: trainingResult.model_summary.chart_data.media_contribution.dates,
+                                datasets: [
+                                  {
+                                    label: 'Mean Recover x1 Effect',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x1.predicted_mean,
+                                    borderColor: '#1976d2',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                  {
+                                    label: '95% Credible Interval',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x1.confidence_upper,
+                                    borderColor: 'rgba(25, 118, 210, 0.2)',
+                                    backgroundColor: 'rgba(25, 118, 210, 0.2)',
+                                    borderWidth: 0,
+                                    fill: '+1',
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                  {
+                                    label: '',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x1.confidence_lower,
+                                    borderColor: 'rgba(25, 118, 210, 0.2)',
+                                    backgroundColor: 'rgba(25, 118, 210, 0.2)',
+                                    borderWidth: 0,
+                                    fill: false,
+                                    pointRadius: 0,
+                                    tension: 0.1,
+                                    pointHoverRadius: 0,
+                                    pointHitRadius: 0
+                                  },
+                                  {
+                                    label: 'Real x1 Effect',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x1.real_effect,
+                                    borderColor: '#000000',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  }
+                                ]
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  title: {
+                                    display: true,
+                                    text: 'X1 (Social Media) Contribution Recovery',
+                                    font: { size: 12, weight: 'bold' }
+                                  },
+                                  legend: {
+                                    display: true,
+                                    position: 'top',
+                                    labels: {
+                                      filter: (legendItem) => legendItem.text !== ''
+                                    }
+                                  }
+                                },
+                                scales: {
+                                  x: {
+                                    title: {
+                                      display: true,
+                                      text: 'Date'
+                                    }
+                                  },
+                                  y: {
+                                    title: {
+                                      display: true,
+                                      text: 'Effect'
+                                    }
+                                  }
+                                }
+                              }}
+                            />
+                          </div>
+                          
+                          {/* X2 (Search Engine) Chart */}
+                          <div style={{ height: '300px' }}>
+                            <Line
+                              data={{
+                                labels: trainingResult.model_summary.chart_data.media_contribution.dates,
+                                datasets: [
+                                  {
+                                    label: 'Mean Recover x2 Effect',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x2.predicted_mean,
+                                    borderColor: '#ff9800',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                  {
+                                    label: '95% Credible Interval',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x2.confidence_upper,
+                                    borderColor: 'rgba(255, 152, 0, 0.2)',
+                                    backgroundColor: 'rgba(255, 152, 0, 0.2)',
+                                    borderWidth: 0,
+                                    fill: '+1',
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  },
+                                  {
+                                    label: '',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x2.confidence_lower,
+                                    borderColor: 'rgba(255, 152, 0, 0.2)',
+                                    backgroundColor: 'rgba(255, 152, 0, 0.2)',
+                                    borderWidth: 0,
+                                    fill: false,
+                                    pointRadius: 0,
+                                    tension: 0.1,
+                                    pointHoverRadius: 0,
+                                    pointHitRadius: 0
+                                  },
+                                  {
+                                    label: 'Real x2 Effect',
+                                    data: trainingResult.model_summary.chart_data.media_contribution.x2.real_effect,
+                                    borderColor: '#000000',
+                                    backgroundColor: 'transparent',
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    tension: 0.1
+                                  }
+                                ]
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  title: {
+                                    display: true,
+                                    text: 'X2 (Search Engine) Contribution Recovery',
+                                    font: { size: 12, weight: 'bold' }
+                                  },
+                                  legend: {
+                                    display: true,
+                                    position: 'top',
+                                    labels: {
+                                      filter: (legendItem) => legendItem.text !== ''
+                                    }
+                                  }
+                                },
+                                scales: {
+                                  x: {
+                                    title: {
+                                      display: true,
+                                      text: 'Date'
+                                    }
+                                  },
+                                  y: {
+                                    title: {
+                                      display: true,
+                                      text: 'Effect'
+                                    }
+                                  }
+                                }
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : trainingResult.model_summary?.plot_available ? (
+                    <div style={{ 
+                      marginTop: '6px', 
+                      padding: '6px', 
+                      backgroundColor: '#fff3e0', 
+                      borderRadius: '4px',
+                      border: '1px solid #ffb74d'
+                    }}>
+                      <strong style={{ color: '#f57c00' }}>📊 Model evaluation completed</strong>
+                      <div style={{ fontSize: '9px', color: '#666', marginTop: '2px' }}>
+                        Chart data processing...
+                      </div>
+                    </div>
+                  ) : null}
+                  
+                  <details style={{ marginTop: '8px' }}>
+                    <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '9px' }}>Technical Details (Click to expand)</summary>
+                    <pre style={{ 
+                      fontSize: '8px', 
+                      margin: '5px 0 0 0', 
+                      whiteSpace: 'pre-wrap',
+                      maxHeight: '100px',
+                      overflow: 'auto',
+                      background: 'white',
+                      padding: '5px',
+                      borderRadius: '3px'
+                    }}>
+                      {JSON.stringify(trainingResult.model_summary, null, 2)}
+                    </pre>
+                  </details>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* 说明文档 */}
+        {/* Documentation */}
         <div style={{ fontSize: '11px', color: '#666', lineHeight: '1.5' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>使用说明</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Instructions</h4>
           <ul style={{ margin: 0, paddingLeft: '15px' }}>
-            <li>拖拽节点到画布添加新节点</li>
-            <li>拖拽节点边缘的圆点创建连接</li>
-            <li>点击选中节点或边</li>
-            <li>按Delete键删除选中元素</li>
-            <li>可以拖拽移动节点位置</li>
-            <li>设计完DAG后点击训练模型</li>
+            <li>Drag nodes to canvas to add new nodes</li>
+            <li>Drag node edge dots to create connections</li>
+            <li>Click to select nodes or edges</li>
+            <li>Press Delete key to delete selected elements</li>
+            <li>Drag to move node positions</li>
+            <li>Click Train Model after designing DAG</li>
           </ul>
         </div>
       </div>
 
-      {/* 主画布区域 */}
+      {/* Main Canvas Area */}
       <div ref={reactFlowWrapper} style={{ flex: 1 }}>
         <ReactFlow
           nodes={nodes.map(node => ({

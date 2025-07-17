@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-因果关系媒体混合建模教程
+Causal Media Mix Modeling Tutorial
 Understanding Causal Relationships in Media Mix Modeling
 
-本教程演示如何在媒体混合建模中理解和应用因果关系，包括：
-1. 因果识别的概念和重要性
-2. 因果有向无环图(DAG)的构建
-3. 数据生成过程模拟
-4. 不同因果模型的比较
-5. 使用高斯过程处理隐藏变量
+This tutorial demonstrates how to understand and apply causal relationships in media mix modeling, including:
+1. The concept and importance of causal identification
+2. Construction of causal directed acyclic graphs (DAGs)
+3. Data generation process simulation
+4. Comparison of different causal models
+5. Using Gaussian processes to handle latent variables
 """
 
 import warnings
@@ -22,28 +22,29 @@ import arviz as az
 from graphviz import Digraph
 import os
 import sys
+import traceback
 
-# 尝试导入seaborn，如果失败则使用matplotlib替代
+# Try to import seaborn, fall back to matplotlib if it fails
 try:
     import seaborn as sns
     SEABORN_AVAILABLE = True
 except ImportError:
-    print("警告: seaborn未安装，将使用matplotlib基础绘图")
+    print("Warning: seaborn not installed, will use basic matplotlib plotting")
     SEABORN_AVAILABLE = False
     
-# 尝试导入IPython.display，如果失败则创建替代函数
+# Try to import IPython.display, create fallback function if it fails
 try:
     from IPython.display import SVG, display
     IPYTHON_AVAILABLE = True
 except ImportError:
-    print("警告: IPython未安装，将跳过内联显示")
+    print("Warning: IPython not installed, will skip inline display")
     IPYTHON_AVAILABLE = False
     def display(x):
         pass
     def SVG(x):
         return x
 
-# 确保所有必要的包都能正确导入
+# Ensure all necessary packages can be imported correctly
 try:
     import preliz as pz
     from pymc_marketing.mmm import MMM, GeometricAdstock, MichaelisMentenSaturation
@@ -51,23 +52,23 @@ try:
     from pymc_marketing.prior import Prior
     PYMC_MARKETING_AVAILABLE = True
 except ImportError as e:
-    print(f"警告: PyMC-Marketing导入失败: {e}")
-    print("请安装 pymc-marketing: pip install pymc-marketing")
+    print(f"Warning: PyMC-Marketing import failed: {e}")
+    print("Please install pymc-marketing: pip install pymc-marketing")
     PYMC_MARKETING_AVAILABLE = False
 
-# 设置绘图样式
+# Set plotting style
 plt.style.use('default')
 plt.rcParams["figure.figsize"] = [12, 7]
 plt.rcParams["figure.dpi"] = 100
 plt.rcParams.update({"figure.constrained_layout.use": True})
 
-# 设置中文字体支持
+# Set Chinese font support
 def setup_chinese_font():
-    """设置matplotlib中文字体支持"""
+    """Set up matplotlib Chinese font support"""
     import matplotlib.font_manager as fm
     import platform
     
-    # 根据系统选择合适的中文字体
+    # Choose appropriate Chinese font based on system
     system = platform.system()
     
     if system == "Darwin":  # macOS
@@ -86,7 +87,7 @@ def setup_chinese_font():
             'DejaVu Sans'
         ]
     
-    # 查找可用的字体
+    # Find available fonts
     available_fonts = [f.name for f in fm.fontManager.ttflist]
     
     selected_font = None
@@ -97,64 +98,64 @@ def setup_chinese_font():
     
     if selected_font:
         plt.rcParams['font.sans-serif'] = [selected_font]
-        plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-        print(f"使用字体: {selected_font}")
+        plt.rcParams['axes.unicode_minus'] = False  # Fix negative sign display issue
+        print(f"Using font: {selected_font}")
     else:
-        print("警告: 未找到合适的中文字体，将使用英文标签")
+        print("Warning: No suitable Chinese font found, will use English labels")
         plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
         plt.rcParams['axes.unicode_minus'] = False
         return False
     
     return True
 
-# 设置中文字体
-CHINESE_FONT_AVAILABLE = setup_chinese_font()
+# Set English font (disable Chinese font support)
+CHINESE_FONT_AVAILABLE = False
 
-# 标签字典 - 中文/英文标签对照
+# Label dictionary - use English labels only
 LABELS = {
     'title': {
-        'market_growth': '市场增长趋势' if CHINESE_FONT_AVAILABLE else 'Market Growth Trend',
-        'holiday_effect': '假期效应' if CHINESE_FONT_AVAILABLE else 'Holiday Effect',
-        'competitor_offers': '竞争对手优惠' if CHINESE_FONT_AVAILABLE else 'Competitor Offers',
-        'marketing_channels': '营销渠道' if CHINESE_FONT_AVAILABLE else 'Marketing Channels',
-        'transformed_channels': '变换后的营销渠道' if CHINESE_FONT_AVAILABLE else 'Transformed Marketing Channels',
-        'target_variable': '销售额 (目标变量)' if CHINESE_FONT_AVAILABLE else 'Sales (Target Variable)',
-        'x1_recovery_corr': 'X1 渠道贡献恢复 - 相关性模型' if CHINESE_FONT_AVAILABLE else 'X1 Channel Contribution Recovery - Correlational Model',
-        'x1_recovery_causal': 'X1 渠道贡献恢复 - 因果模型' if CHINESE_FONT_AVAILABLE else 'X1 Channel Contribution Recovery - Causal Model',
-        'x2_recovery_corr': 'X2 渠道贡献恢复 - 相关性模型' if CHINESE_FONT_AVAILABLE else 'X2 Channel Contribution Recovery - Correlational Model',
-        'x2_recovery_causal': 'X2 渠道贡献恢复 - 因果模型' if CHINESE_FONT_AVAILABLE else 'X2 Channel Contribution Recovery - Causal Model',
-        'time_varying_intercept': '时变截距恢复效果' if CHINESE_FONT_AVAILABLE else 'Time-Varying Intercept Recovery',
+        'market_growth': 'Market Growth Trend',
+        'holiday_effect': 'Holiday Effect',
+        'competitor_offers': 'Competitor Offers',
+        'marketing_channels': 'Marketing Channels',
+        'transformed_channels': 'Transformed Marketing Channels',
+        'target_variable': 'Sales (Target Variable)',
+        'x1_recovery_corr': 'X1 Channel Contribution Recovery - Correlational Model',
+        'x1_recovery_causal': 'X1 Channel Contribution Recovery - Causal Model',
+        'x2_recovery_corr': 'X2 Channel Contribution Recovery - Correlational Model',
+        'x2_recovery_causal': 'X2 Channel Contribution Recovery - Causal Model',
+        'time_varying_intercept': 'Time-Varying Intercept Recovery',
     },
     'label': {
-        'x1_social': 'X1 (社交媒体)' if CHINESE_FONT_AVAILABLE else 'X1 (Social Media)',
-        'x2_search': 'X2 (搜索引擎)' if CHINESE_FONT_AVAILABLE else 'X2 (Search Engine)',
-        'x1_transformed': 'X1 变换后' if CHINESE_FONT_AVAILABLE else 'X1 Transformed',
-        'x2_transformed': 'X2 变换后' if CHINESE_FONT_AVAILABLE else 'X2 Transformed',
-        'correlational_model': '相关性模型' if CHINESE_FONT_AVAILABLE else 'Correlational Model',
-        'causal_model': '因果模型' if CHINESE_FONT_AVAILABLE else 'Causal Model',
-        'true_effect': '真实效果' if CHINESE_FONT_AVAILABLE else 'True Effect',
-        'true_hidden_factors': '真实隐藏因子 (截距 + 市场增长 - 竞争对手)' if CHINESE_FONT_AVAILABLE else 'True Hidden Factors (Intercept + Market Growth - Competitor)',
-        'recovered_intercept': '恢复的时变截距' if CHINESE_FONT_AVAILABLE else 'Recovered Time-Varying Intercept',
-        'confidence_interval': '95% 置信区间' if CHINESE_FONT_AVAILABLE else '95% Confidence Interval',
+        'x1_social': 'X1 (Social Media)',
+        'x2_search': 'X2 (Search Engine)',
+        'x1_transformed': 'X1 Transformed',
+        'x2_transformed': 'X2 Transformed',
+        'correlational_model': 'Correlational Model',
+        'causal_model': 'Causal Model',
+        'true_effect': 'True Effect',
+        'true_hidden_factors': 'True Hidden Factors (Intercept + Market Growth - Competitor)',
+        'recovered_intercept': 'Recovered Time-Varying Intercept',
+        'confidence_interval': '95% Confidence Interval',
     },
     'axis': {
-        'market_growth': '市场增长' if CHINESE_FONT_AVAILABLE else 'Market Growth',
-        'holiday_signal': '假期信号' if CHINESE_FONT_AVAILABLE else 'Holiday Signal',
-        'competitor_offers': '竞争对手优惠' if CHINESE_FONT_AVAILABLE else 'Competitor Offers',
-        'exposure': '曝光量' if CHINESE_FONT_AVAILABLE else 'Exposure',
-        'transformed_exposure': '变换后曝光量' if CHINESE_FONT_AVAILABLE else 'Transformed Exposure',
-        'sales': '销售额' if CHINESE_FONT_AVAILABLE else 'Sales',
-        'date': '日期' if CHINESE_FONT_AVAILABLE else 'Date',
-        'intercept_value': '截距值' if CHINESE_FONT_AVAILABLE else 'Intercept Value',
+        'market_growth': 'Market Growth',
+        'holiday_signal': 'Holiday Signal',
+        'competitor_offers': 'Competitor Offers',
+        'exposure': 'Exposure',
+        'transformed_exposure': 'Transformed Exposure',
+        'sales': 'Sales',
+        'date': 'Date',
+        'intercept_value': 'Intercept Value',
     }
 }
 
-# 设置随机种子确保结果可重现
+# Set random seed to ensure reproducible results
 seed = sum(map(ord, "Causal MMM"))
 rng = np.random.default_rng(seed)
 
 class CausalMMMTutorial:
-    """因果关系媒体混合建模教程类"""
+    """Causal Media Mix Modeling Tutorial Class"""
     
     def __init__(self):
         self.seed = seed
@@ -165,45 +166,45 @@ class CausalMMMTutorial:
         self.date_range = None
         
     def explain_causal_concepts(self):
-        """解释因果识别的核心概念"""
+        """Explain the core concepts of causal identification"""
         print("="*80)
-        print("因果关系媒体混合建模教程")
+        print("Causal Media Mix Modeling Tutorial")
         print("="*80)
         print()
-        print("1. 什么是因果识别？")
-        print("因果识别是确定我们是否可以使用现有数据和假设来证明因果关系的过程。")
-        print("它帮助我们建立不同因素之间的明确联系，而不仅仅是观察它们的相关性。")
+        print("1. What is causal identification?")
+        print("Causal identification is the process of determining whether we can use existing data and assumptions to prove causal relationships.")
+        print("It helps us establish clear connections between different factors, not just observe their correlations.")
         print()
-        print("2. 为什么在回归中理解因果关系很重要？")
-        print("- 混淆偏差: 隐藏因素同时影响预测变量和结果变量")
-        print("- 选择偏差: 非随机样本可能扭曲估计的关系")
-        print("- 过度控制: 调整受治疗影响的变量可能导致错误的因果效应估计")
+        print("2. Why is understanding causality important in regression?")
+        print("- Confounding bias: Hidden factors simultaneously affect predictors and outcome variables")
+        print("- Selection bias: Non-random samples may distort estimated relationships")
+        print("- Over-control: Adjusting for variables affected by treatment may lead to incorrect causal effect estimates")
         print()
-        print("3. 关键概念:")
-        print("- 因果有向无环图(DAG): 显示假设因果关系的可视化工具")
-        print("- 后门准则: 识别哪些变量可以阻断产生误导性连接的路径")
-        print("- 最小调整集: 满足后门准则所需的最小变量组")
+        print("3. Key concepts:")
+        print("- Causal Directed Acyclic Graph (DAG): Visualization tool showing assumed causal relationships")
+        print("- Backdoor criterion: Identifies which variables can block paths that create misleading connections")
+        print("- Minimal adjustment set: Minimal set of variables needed to satisfy the backdoor criterion")
         print()
         
     def create_business_scenario_dag(self):
-        """创建业务场景的因果图"""
-        print("4. 业务场景:")
-        print("假设您经营一家零售公司，在假期期间销售额增长。")
-        print("您不是唯一的广告商，竞争对手也在推广他们的产品。")
+        """Create causal graph for business scenario"""
+        print("4. Business scenario:")
+        print("Suppose you run a retail company with increased sales during holidays.")
+        print("You're not the only advertiser; competitors are also promoting their products.")
         print()
-        print("变量说明:")
-        print("- Christmas (C): 假期季节提升消费者兴趣")
-        print("- X1: 社交媒体广告 (Facebook, TikTok)")
-        print("- X2: 搜索引擎广告")
-        print("- Target (T): 销售收入")
-        print("- Competitor Offers (I): 竞争对手优惠")
-        print("- Market Growth (G): 市场增长")
+        print("Variable descriptions:")
+        print("- Christmas (C): Holiday season boosts consumer interest")
+        print("- X1: Social media advertising (Facebook, TikTok)")
+        print("- X2: Search engine advertising")
+        print("- Target (T): Sales revenue")
+        print("- Competitor Offers (I): Competitor offers")
+        print("- Market Growth (G): Market growth")
         print()
         
-        # 创建因果图
+        # Create causal graph
         dot = Digraph(comment='Business Scenario DAG')
         
-        # 添加节点
+        # Add nodes
         dot.node("C", "Christmas", style="dashed")
         dot.node("X1", "Marketing X1")
         dot.node("X2", "Marketing X2")
@@ -211,7 +212,7 @@ class CausalMMMTutorial:
         dot.node("G", "Market Growth", style="dashed")
         dot.node("T", "Target")
         
-        # 添加边
+        # Add edges
         dot.edge("C", "X1", style="dashed")
         dot.edge("C", "X2", style="dashed")
         dot.edge("I", "X2", style="dashed")
@@ -222,21 +223,124 @@ class CausalMMMTutorial:
         dot.edge("I", "T", style="dashed")
         dot.edge("G", "T", style="dashed")
         
-        # 保存图形
+        # Save graph
         try:
             dot.render('business_scenario_dag', format='png', cleanup=True)
-            print("因果图已保存为 'business_scenario_dag.png'")
+            print("Causal graph saved as 'business_scenario_dag.png'")
         except Exception as e:
-            print(f"保存因果图时出错: {e}")
+            print(f"Error saving causal graph: {e}")
             
         return dot
         
     def generate_synthetic_data(self):
-        """生成合成数据"""
-        print("\n5. 数据生成过程:")
-        print("我们将创建一个模拟数据集，反映上述因果关系...")
+        """First try to load real data, generate synthetic data if fails"""
+        print("\n5. Data loading process:")
+        print("Attempting to load real MMM dataset...")
         
-        # 创建日期范围
+        # First try to load real data
+        try:
+            return self.load_real_mmm_data()
+        except Exception as e:
+            print(f"Failed to load real data: {e}")
+            print("Falling back to synthetic data generation...")
+            return self.generate_synthetic_data_fallback()
+    
+    def load_real_mmm_data(self):
+        """Load real MMM data"""
+        print("Attempting to load PyMC-Marketing MMM dataset...")
+        
+        # 首先尝试加载详细的ROAS数据
+        try:
+            data_path = "data/mmm_roas_data.csv"
+            self.df = pd.read_csv(data_path)
+            
+            # 转换日期列
+            self.df['date'] = pd.to_datetime(self.df['date'])
+            self.df['date_week'] = self.df['date']
+            
+            # 重命名列以匹配我们的模型
+            if 'y' in self.df.columns and 'target' not in self.df.columns:
+                self.df['target'] = self.df['y']
+            
+            # 确保必要的列存在
+            required_cols = ['x1', 'x2', 'target']
+            missing_cols = [col for col in required_cols if col not in self.df.columns]
+            if missing_cols:
+                raise ValueError(f"缺少必要的列: {missing_cols}")
+                
+            # 添加时间特征
+            if 'dayofyear' not in self.df.columns:
+                self.df['dayofyear'] = self.df['date'].dt.dayofyear
+            if 't' not in self.df.columns:
+                self.df['t'] = range(len(self.df))
+                
+            print(f"✅ Successfully loaded ROAS data: {data_path}")
+            print(f"📊 Number of observations: {len(self.df)}")
+            print(f"📅 Time range: {self.df['date'].min()} to {self.df['date'].max()}")
+            print(f"📋 Data columns: {list(self.df.columns)}")
+            
+            # 设置date_range用于兼容性
+            self.date_range = self.df['date']
+            
+            # 设置self.data用于模型训练
+            self._prepare_model_data()
+            
+            return self.df
+            
+        except Exception as e:
+            print(f"Failed to load ROAS data: {e}")
+            # 尝试基础MMM数据
+            try:
+                data_path = "data/mmm_example.csv"
+                self.df = pd.read_csv(data_path)
+                
+                # 转换日期列
+                if 'date_week' in self.df.columns:
+                    self.df['date_week'] = pd.to_datetime(self.df['date_week'])
+                    self.df['date'] = self.df['date_week']
+                
+                # 重命名目标变量
+                if 'y' in self.df.columns and 'target' not in self.df.columns:
+                    self.df['target'] = self.df['y']
+                
+                # 添加缺失的列
+                if 'christmas' not in self.df.columns:
+                    # 基于日期生成圣诞节标记
+                    self.df['christmas'] = ((self.df['date'].dt.month == 12) & 
+                                           (self.df['date'].dt.day >= 20)).astype(int)
+                
+                if 'competitor' not in self.df.columns:
+                    # 使用现有的event列或生成随机竞争对手数据
+                    if 'event_1' in self.df.columns:
+                        self.df['competitor'] = self.df['event_1']
+                    else:
+                        np.random.seed(42)
+                        self.df['competitor'] = np.random.beta(2, 5, len(self.df))
+                
+                if 'market_growth' not in self.df.columns:
+                    # 生成市场增长趋势
+                    self.df['market_growth'] = np.linspace(0.8, 1.2, len(self.df))
+                
+                print(f"✅ 成功加载基础MMM数据: {data_path}")
+                print(f"📊 观测数量: {len(self.df)}")
+                print(f"📋 数据列: {list(self.df.columns)}")
+                
+                # 设置date_range用于兼容性
+                self.date_range = self.df['date']
+                
+                # 设置self.data用于模型训练
+                self._prepare_model_data()
+                
+                return self.df
+                
+            except Exception as e2:
+                raise Exception(f"所有真实数据加载失败 - ROAS: {e}, 基础: {e2}")
+    
+    def generate_synthetic_data_fallback(self):
+        """Generate synthetic data using the exact user specification"""
+        print("Using user-specified data generation method...")
+        
+        # Create date range
         min_date = pd.to_datetime("2022-01-01")
         max_date = pd.to_datetime("2024-11-06")
         self.date_range = pd.date_range(start=min_date, end=max_date, freq="D")
@@ -248,28 +352,437 @@ class CausalMMMTutorial:
         )
         
         n = self.df.shape[0]
-        print(f"观测数量: {n}")
+        print(f"Observation count: {n}")
         
-        # 生成市场增长趋势
+        # Generate market growth
         self.df["market_growth"] = (np.linspace(start=0.0, stop=50, num=n) + 10) ** (1 / 4) - 1
         
-        # 生成假期效应
-        self._generate_holiday_effect(n)
+        # Generate holiday signal
+        holiday_dates = ["24-12"]  # Christmas
+        std_devs = [25]  # Holiday influence standard deviation (days)
+        holidays_coefficients = [2]  # Holiday influence coefficient
         
-        # 生成竞争对手优惠
-        self._generate_competitor_offers(n)
+        holiday_signal = np.zeros(n)
+        for holiday_date, std_dev, coeff in zip(holiday_dates, std_devs, holidays_coefficients):
+            for year in self.df['year'].unique():
+                holiday_datetime = pd.to_datetime(f"{year}-{holiday_date}")
+                if min_date <= holiday_datetime <= max_date:
+                    days_diff = (self.date_range - holiday_datetime).days
+                    holiday_signal += coeff * np.exp(-0.5 * (days_diff / std_dev) ** 2)
         
-        # 生成营销渠道数据
-        self._generate_marketing_channels(n)
+        self.df["holiday_signal"] = holiday_signal
+        self.df["holiday_contributions"] = holiday_signal * 0.5  # Scale factor
         
-        # 应用adstock和饱和度变换
-        self._apply_transformations()
+        # Generate competitor offers
+        competitor_base = pz.Normal(mu=2, sigma=0.5).rvs(n, random_state=rng)
+        competitor_conv = np.convolve(competitor_base, np.ones(7) / 7, mode="same")
+        self.df["competitor_offers"] = competitor_conv
         
-        # 生成目标变量
-        self._generate_target_variable(n)
+        # Generate x1 (Social Media)
+        x1 = pz.Normal(mu=5, sigma=3).rvs(n, random_state=rng)
+        cofounder_effect_holiday_x1 = 2.5
+        x1_conv = np.convolve(x1, np.ones(14) / 14, mode="same")
+        # Replace first and last 14 values with mean + noise
+        noise = pz.Normal(mu=0, sigma=0.1).rvs(28, random_state=rng)
+        x1_conv[:14] = x1_conv.mean() + noise[:14]
+        x1_conv[-14:] = x1_conv.mean() + noise[14:]
+        self.df["x1"] = x1_conv + (holiday_signal * cofounder_effect_holiday_x1)
         
-        print("数据生成完成！")
+        # Generate x2 (Search Engine)
+        x2 = pz.Normal(mu=5, sigma=2).rvs(n, random_state=rng)
+        cofounder_effect_holiday_x2 = 2.2
+        cofounder_effect_x1_x2 = 1.3
+        cofounder_effect_competitor_offers_x2 = -0.7
+        x2_conv = np.convolve(x2, np.ones(18) / 12, mode="same")
+        # Replace first and last 14 values with mean + noise
+        noise = pz.Normal(mu=0, sigma=0.1).rvs(28, random_state=rng)
+        x2_conv[:14] = x2_conv.mean() + noise[:14]
+        x2_conv[-14:] = x2_conv.mean() + noise[14:]
+        self.df["x2"] = (
+            x2_conv
+            + (holiday_signal * cofounder_effect_holiday_x2)
+            + (self.df["x1"] * cofounder_effect_x1_x2)
+            + (self.df["competitor_offers"] * cofounder_effect_competitor_offers_x2)
+        )
+        
+        # Apply geometric adstock transformation
+        alpha1: float = 0.6
+        alpha2: float = 0.2
+        
+        self.df["x1_adstock"] = (
+            geometric_adstock(x=self.df["x1"].to_numpy(), alpha=alpha1, l_max=24, normalize=True)
+            .eval()
+            .flatten()
+        )
+        
+        self.df["x2_adstock"] = (
+            geometric_adstock(x=self.df["x2"].to_numpy(), alpha=alpha2, l_max=24, normalize=True)
+            .eval()
+            .flatten()
+        )
+        
+        # Apply saturation transformation
+        lam1: float = 5.0
+        lam2: float = 9.0
+        alpha_mm1: float = 6
+        alpha_mm2: float = 12
+        
+        self.df["x1_adstock_saturated"] = michaelis_menten(
+            x=self.df["x1_adstock"].to_numpy(), lam=lam1, alpha=alpha_mm1
+        )
+        
+        self.df["x2_adstock_saturated"] = michaelis_menten(
+            x=self.df["x2_adstock"].to_numpy(), lam=lam2, alpha=alpha_mm2
+        )
+        
+        # Generate target variable
+        self.df["intercept"] = 1.5
+        self.df["epsilon"] = rng.normal(loc=0.0, scale=0.08, size=n)
+        
+        self.df["y"] = (
+            self.df["intercept"]
+            + self.df["market_growth"]  # implicit coef 1
+            - self.df["competitor_offers"]  # explicit coef -1
+            + self.df["holiday_contributions"]
+            + self.df["x1_adstock_saturated"]
+            + self.df["x2_adstock_saturated"]
+            + self.df["epsilon"]  # Noise
+        )
+        
+        # Prepare data for modeling
+        columns_to_keep = [
+            "date_week", 
+            "y",
+            "x1",
+            "x2",
+            "holiday_signal"
+        ]
+        
+        self.data = self.df[columns_to_keep].copy()
+        self.data.rename(columns={'date_week': 'date', 'y': 'target'}, inplace=True)
+        
+        print("User-specified synthetic data generation completed!")
+        print(f"   Data shape: {self.data.shape}")
+        print(f"   Columns: {list(self.data.columns)}")
+        print(f"   Target variable stats: Mean={self.data['target'].mean():.2f}, Std={self.data['target'].std():.2f}")
+        
         return self.df
+    
+    def _prepare_model_data(self):
+        """准备用于模型训练的数据"""
+        try:
+            print("🔍 准备模型数据...")
+            
+            # 确定数据列
+            if 'target' in self.df.columns:
+                target_col = 'target'
+            elif 'y' in self.df.columns:
+                target_col = 'y'
+            else:
+                raise ValueError("数据中没有找到目标变量列 ('target' 或 'y')")
+            
+            # 确保必要的列存在
+            required_cols = ['x1', 'x2']
+            missing_cols = [col for col in required_cols if col not in self.df.columns]
+            if missing_cols:
+                raise ValueError(f"数据中缺少必要的列: {missing_cols}")
+            
+            # 确保date_range存在
+            if self.date_range is None:
+                if 'date_week' in self.df.columns:
+                    self.date_range = pd.to_datetime(self.df['date_week'])
+                elif 'date' in self.df.columns:
+                    self.date_range = pd.to_datetime(self.df['date'])
+                else:
+                    # 创建默认的日期范围
+                    min_date = pd.to_datetime("2022-01-01")
+                    self.date_range = pd.date_range(start=min_date, periods=len(self.df), freq="D")
+            
+            # 生成缺失的字段
+            if 'holiday_signal' not in self.df.columns:
+                print("📅 生成假期信号字段...")
+                self._generate_holiday_signal_for_real_data()
+            
+            # 选择用于建模的列
+            if 'date_week' in self.df.columns:
+                date_col = 'date_week'
+            elif 'date' in self.df.columns:
+                date_col = 'date'
+            else:
+                # 如果没有日期列，创建一个索引
+                self.df['date_week'] = range(len(self.df))
+                date_col = 'date_week'
+            
+            # 重命名目标变量为'y'以保持一致性
+            if target_col != 'y':
+                self.df['y'] = self.df[target_col]
+            
+            # 选择建模所需的列
+            columns_to_keep = [date_col, "y", "x1", "x2"]
+            
+            # 添加控制变量（如果存在）
+            control_vars = ["holiday_signal"]
+            for var in control_vars:
+                if var in self.df.columns:
+                    columns_to_keep.append(var)
+            
+            # 只保留存在的列
+            available_columns = [col for col in columns_to_keep if col in self.df.columns]
+            
+            self.data = self.df[available_columns].copy()
+            
+            # 确保日期列名为'date'以匹配MMM模型期望
+            if date_col != 'date':
+                self.data.rename(columns={date_col: 'date'}, inplace=True)
+            
+            print(f"✅ 模型数据准备完成")
+            print(f"   数据形状: {self.data.shape}")
+            print(f"   包含列: {list(self.data.columns)}")
+            print(f"   目标变量统计: 均值={self.data['y'].mean():.2f}, 标准差={self.data['y'].std():.2f}")
+            
+        except Exception as e:
+            print(f"❌ 模型数据准备失败: {e}")
+            print(f"详细错误: {traceback.format_exc()}")
+            # 设置为None，让后续逻辑处理
+            self.data = None
+            raise
+    
+    def _generate_holiday_signal_for_real_data(self):
+        """为真实数据生成假期信号"""
+        try:
+            # 假期定义
+            holiday_dates = ["24-12"]  # 圣诞节 (MM-DD格式)
+            std_devs = [25]  # 假期影响的标准差（天数）
+            holidays_coefficients = [2]  # 假期影响系数
+            
+            # 初始化信号数组
+            holiday_signal = np.zeros(len(self.date_range))
+            holiday_contributions = np.zeros(len(self.date_range))
+            
+            print(f"正在为 {len(holiday_dates)} 个假期生成信号...")
+            
+            # 为每个假期生成信号
+            for holiday, std_dev, holiday_coef in zip(holiday_dates, std_devs, holidays_coefficients):
+                # 查找假期在日期范围内的所有出现
+                holiday_occurrences = self.date_range[self.date_range.dt.strftime("%d-%m") == holiday]
+                
+                print(f"假期 {holiday} 在数据范围内出现 {len(holiday_occurrences)} 次")
+                
+                for occurrence in holiday_occurrences:
+                    # 计算每个日期与假期的时间差
+                    time_diff = (self.date_range - occurrence).days
+                    
+                    # 使用高斯函数生成假期信号
+                    _holiday_signal = np.exp(-0.5 * (time_diff / std_dev) ** 2)
+                    
+                    # 累加假期信号
+                    holiday_signal += _holiday_signal
+                    holiday_contributions += _holiday_signal * holiday_coef
+            
+            # 将生成的信号添加到数据框
+            self.df["holiday_signal"] = holiday_signal
+            self.df["holiday_contributions"] = holiday_contributions
+            
+            print(f"✅ 假期信号生成完成")
+            print(f"   holiday_signal 范围: [{holiday_signal.min():.4f}, {holiday_signal.max():.4f}]")
+            print(f"   holiday_contributions 范围: [{holiday_contributions.min():.4f}, {holiday_contributions.max():.4f}]")
+            
+        except Exception as e:
+            print(f"❌ 假期信号生成失败: {e}")
+            # 如果生成失败，创建零值信号
+            self.df["holiday_signal"] = np.zeros(len(self.df))
+            self.df["holiday_contributions"] = np.zeros(len(self.df))
+            print("⚠️ 使用零值假期信号作为回退方案")
+    
+    def generate_model_evaluation_plots(self, model_result):
+        """生成模型拟合图和评估指标"""
+        if model_result is None or not hasattr(model_result, 'idata'):
+            print("⚠️ 无法生成拟合图：模型结果无效")
+            return None
+            
+        try:
+            import matplotlib.pyplot as plt
+            from sklearn.metrics import mean_absolute_percentage_error, r2_score
+            import arviz as az
+            
+            print("\n📊 生成模型评估图表...")
+            
+            # 获取模型预测
+            posterior_predictive = az.extract(model_result.idata, group="posterior_predictive")
+            y_pred_mean = posterior_predictive["y"].mean(dim="sample").values
+            y_pred_std = posterior_predictive["y"].std(dim="sample").values
+            
+            # 实际值
+            y_actual = self.df['y'].values[:len(y_pred_mean)]
+            
+            # 计算评估指标
+            r2 = r2_score(y_actual, y_pred_mean)
+            mape = mean_absolute_percentage_error(y_actual, y_pred_mean)
+            mae = np.mean(np.abs(y_actual - y_pred_mean))
+            rmse = np.sqrt(np.mean((y_actual - y_pred_mean) ** 2))
+            
+            print(f"📈 Model evaluation metrics:")
+            print(f"   R² Score: {r2:.4f}")
+            print(f"   MAPE: {mape:.4f} ({mape*100:.2f}%)")
+            print(f"   MAE: {mae:.2f}")
+            print(f"   RMSE: {rmse:.2f}")
+            
+            # Create fit plots
+            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+            fig.suptitle('Model Fit Quality Assessment', fontsize=16, fontweight='bold')
+            
+            # 1. Actual vs Predicted values
+            axes[0, 0].scatter(y_actual, y_pred_mean, alpha=0.6, color='steelblue')
+            min_val = min(y_actual.min(), y_pred_mean.min())
+            max_val = max(y_actual.max(), y_pred_mean.max())
+            axes[0, 0].plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8)
+            axes[0, 0].set_xlabel('Actual Values')
+            axes[0, 0].set_ylabel('Predicted Values')
+            axes[0, 0].set_title(f'Actual vs Predicted (R² = {r2:.3f})')
+            axes[0, 0].grid(True, alpha=0.3)
+            
+            # 2. 时间序列拟合
+            if 'date' in self.df.columns:
+                dates = self.df['date'].values[:len(y_pred_mean)]
+                axes[0, 1].plot(dates, y_actual, label='Actual', color='black', linewidth=2)
+                axes[0, 1].plot(dates, y_pred_mean, label='Predicted', color='red', linewidth=1.5)
+                axes[0, 1].fill_between(dates, 
+                                       y_pred_mean - 1.96*y_pred_std, 
+                                       y_pred_mean + 1.96*y_pred_std, 
+                                       alpha=0.3, color='red', label='95% Confidence Interval')
+                axes[0, 1].set_xlabel('Date')
+                axes[0, 1].set_ylabel('Value')
+                axes[0, 1].set_title('Time Series Fit')
+                axes[0, 1].legend()
+                axes[0, 1].grid(True, alpha=0.3)
+                # Rotate date labels
+                plt.setp(axes[0, 1].xaxis.get_majorticklabels(), rotation=45)
+            else:
+                axes[0, 1].plot(y_actual, label='Actual', color='black', linewidth=2)
+                axes[0, 1].plot(y_pred_mean, label='Predicted', color='red', linewidth=1.5)
+                axes[0, 1].fill_between(range(len(y_pred_mean)), 
+                                       y_pred_mean - 1.96*y_pred_std, 
+                                       y_pred_mean + 1.96*y_pred_std, 
+                                       alpha=0.3, color='red', label='95% Confidence Interval')
+                axes[0, 1].set_xlabel('Time Point')
+                axes[0, 1].set_ylabel('Value')
+                axes[0, 1].set_title('Time Series Fit')
+                axes[0, 1].legend()
+                axes[0, 1].grid(True, alpha=0.3)
+            
+            # 3. Residual plot
+            residuals = y_actual - y_pred_mean
+            axes[1, 0].scatter(y_pred_mean, residuals, alpha=0.6, color='green')
+            axes[1, 0].axhline(y=0, color='red', linestyle='--', alpha=0.8)
+            axes[1, 0].set_xlabel('Predicted Values')
+            axes[1, 0].set_ylabel('Residuals')
+            axes[1, 0].set_title('Residual Plot')
+            axes[1, 0].grid(True, alpha=0.3)
+            
+            # 4. Residual distribution
+            axes[1, 1].hist(residuals, bins=20, alpha=0.7, color='orange', edgecolor='black')
+            axes[1, 1].axvline(x=0, color='red', linestyle='--', alpha=0.8)
+            axes[1, 1].set_xlabel('Residuals')
+            axes[1, 1].set_ylabel('Frequency')
+            axes[1, 1].set_title(f'Residual Distribution (RMSE = {rmse:.2f})')
+            axes[1, 1].grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # 保存图表
+            import os
+            os.makedirs('plots', exist_ok=True)
+            plot_path = 'plots/model_fit_evaluation.png'
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            print(f"✅ Model fit plot saved to: {plot_path}")
+            
+            # Prepare chart data for frontend - user specified charts
+            chart_data = {
+                'time_series': {
+                    'dates': self.df['date'].dt.strftime('%Y-%m-%d').tolist()[:len(y_pred_mean)] if 'date' in self.df.columns else list(range(len(y_pred_mean))),
+                    'actual': y_actual.tolist(),
+                    'predicted': y_pred_mean.tolist(),
+                    'confidence_upper': (y_pred_mean + 1.96*y_pred_std).tolist(),
+                    'confidence_lower': (y_pred_mean - 1.96*y_pred_std).tolist()
+                }
+            }
+            
+            # Add Media Contribution Recovery data if model has channel_contribution
+            if hasattr(model_result, 'fit_result') and hasattr(model_result.fit_result, 'channel_contribution'):
+                # Extract channel contributions with confidence intervals
+                try:
+                    import arviz as az
+                    
+                    # Get channel contribution data
+                    channel_contrib = model_result.fit_result.channel_contribution
+                    scale_factor = model_result.target_transformer["scaler"].scale_.item()
+                    
+                    # Calculate HDI for channel contributions
+                    channel_hdi = az.hdi(channel_contrib, hdi_prob=0.95) * scale_factor
+                    
+                    # Prepare date range
+                    dates = self.df['date'].dt.strftime('%Y-%m-%d').tolist() if 'date' in self.df.columns else list(range(len(self.df)))
+                    
+                    # X1 (Social Media) contribution data
+                    x1_mean = (channel_contrib.sel(channel="x1").mean(dim=["chain", "draw"]) * scale_factor).values.tolist()
+                    x1_upper = channel_hdi.channel_contribution.isel(hdi=1).sel(channel="x1").values.tolist()
+                    x1_lower = channel_hdi.channel_contribution.isel(hdi=0).sel(channel="x1").values.tolist()
+                    x1_real = self.df["x1_adstock_saturated"].tolist()
+                    
+                    # X2 (Search Engine) contribution data  
+                    x2_mean = (channel_contrib.sel(channel="x2").mean(dim=["chain", "draw"]) * scale_factor).values.tolist()
+                    x2_upper = channel_hdi.channel_contribution.isel(hdi=1).sel(channel="x2").values.tolist()
+                    x2_lower = channel_hdi.channel_contribution.isel(hdi=0).sel(channel="x2").values.tolist()
+                    x2_real = self.df["x2_adstock_saturated"].tolist()
+                    
+                    chart_data['media_contribution'] = {
+                        'dates': dates,
+                        'x1': {
+                            'predicted_mean': x1_mean,
+                            'confidence_upper': x1_upper,
+                            'confidence_lower': x1_lower,
+                            'real_effect': x1_real
+                        },
+                        'x2': {
+                            'predicted_mean': x2_mean,
+                            'confidence_upper': x2_upper,
+                            'confidence_lower': x2_lower,
+                            'real_effect': x2_real
+                        }
+                    }
+                    
+                except Exception as e:
+                    print(f"Warning: Could not extract channel contribution data: {e}")
+            
+            # Keep actual vs predicted for backward compatibility
+            chart_data['actual_vs_predicted'] = {
+                'actual': y_actual.tolist(),
+                'predicted': y_pred_mean.tolist()
+            }
+            
+            # 返回评估结果
+            evaluation_result = {
+                'r2_score': r2,
+                'mape': mape,
+                'mae': mae,
+                'rmse': rmse,
+                'plot_path': plot_path,
+                'sample_size': len(y_actual),
+                'prediction_mean': float(y_pred_mean.mean()),
+                'prediction_std': float(y_pred_mean.std()),
+                'actual_mean': float(y_actual.mean()),
+                'actual_std': float(y_actual.std()),
+                'chart_data': chart_data  # Add chart data for frontend
+            }
+            
+            return evaluation_result
+            
+        except Exception as e:
+            print(f"❌ 生成模型评估图失败: {e}")
+            print(f"详细错误: {traceback.format_exc()}")
+            return None
         
     def _generate_holiday_effect(self, n):
         """生成假期效应"""
@@ -389,6 +902,9 @@ class CausalMMMTutorial:
             + self.df["x2_adstock_saturated"]
             + self.df["epsilon"]
         )
+        
+        # 添加target列以保持兼容性
+        self.df["target"] = self.df["y"]
         
         # 保存用于建模的数据
         columns_to_keep = ["date_week", "y", "x1", "x2"]
@@ -514,71 +1030,77 @@ class CausalMMMTutorial:
             raise ValueError("版本必须是 'simple', 'confounded', 或 'full'")
             
     def run_causal_model(self, version="full"):
-        """运行因果模型"""
+        """Run causal model using user-specified configuration"""
         if not PYMC_MARKETING_AVAILABLE:
-            print("跳过因果模型 - PyMC-Marketing不可用")
+            print("Skipping causal model - PyMC-Marketing not available")
             return None
             
-        print(f"\n7. 因果模型 ({version}):")
-        print("现在我们运行考虑因果关系的模型...")
+        print(f"\n7. Causal model ({version}):")
+        print("Running causal model with user-specified DAG...")
         
-        # 准备数据
-        if version in ["confounded", "full"]:
-            data_with_controls = self.data.copy()
-            data_with_controls["holiday_signal"] = self.df["holiday_signal"]
-            X = data_with_controls.drop("y", axis=1)
-            y = data_with_controls["y"]
-            control_columns = ["holiday_signal"]
-        else:
-            X = self.data.drop("y", axis=1)
-            y = self.data["y"]
-            control_columns = None
-            
-        # 创建因果DAG
-        causal_dag = self.create_causal_dag_string(version)
+        # Prepare data exactly as user specified
+        print(f"🔍 Available data columns: {list(self.data.columns)}")
+        X = self.data.drop("y", axis=1)  # Remove target column
+        y = self.data["y"]
+        print(f"🔍 Feature columns (X): {list(X.columns)}")
+        print(f"🔍 Target column shape: {y.shape}")
         
-        # 创建模型
-        model_config = {}
-        if version == "full":
-            # 使用时变截距处理未观测到的混淆因子
-            causal_mmm = MMM(
-                sampler_config=self.sample_kwargs,
-                date_column="date_week",
-                adstock=GeometricAdstock(l_max=24),
-                saturation=MichaelisMentenSaturation(),
-                channel_columns=["x1", "x2"],
-                control_columns=control_columns,
-                outcome_node="y",
-                dag=causal_dag,
-                time_varying_intercept=True,
-            )
-            causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
-            causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
-        else:
-            causal_mmm = MMM(
-                sampler_config=self.sample_kwargs,
-                date_column="date_week",
-                adstock=GeometricAdstock(l_max=24),
-                saturation=MichaelisMentenSaturation(),
-                channel_columns=["x1", "x2"],
-                control_columns=control_columns,
-                outcome_node="y",
-                dag=causal_dag,
-            )
+        # Define causal DAG exactly as user specified
+        causal_dag = """
+        digraph {
+            x1 -> y;
+            x2 -> y;
+            x1 -> x2;
+            holiday_signal -> y;
+            holiday_signal -> x1;
+            holiday_signal -> x2;
+            competitor_offers -> x2;
+            competitor_offers -> y;
+            market_growth -> y;
+        }
+        """
         
-        # 显示调整集
-        print(f"调整集: {causal_mmm.causal_graphical_model.adjustment_set}")
-        print(f"最小调整集: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
+        # Determine available control columns
+        available_control_columns = []
+        potential_controls = ["holiday_signal"]
+        for col in potential_controls:
+            if col in X.columns:
+                available_control_columns.append(col)
+        
+        print(f"🔍 Available control columns: {available_control_columns}")
+        
+        # Create model with user-specified configuration
+        causal_mmm = MMM(
+            sampler_config=self.sample_kwargs,
+            date_column="date",
+            adstock=GeometricAdstock(l_max=24),
+            saturation=MichaelisMentenSaturation(),
+            channel_columns=["x1", "x2"],
+            control_columns=available_control_columns,
+            # Define the outcome node and the causal DAG
+            outcome_node="y",
+            dag=causal_dag,
+            # Time varying intercept to account for the unobserved confounder
+            time_varying_intercept=True,
+        )
+        
+        # Apply user-specified model configuration
+        causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
+        causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
+        
+        # Display adjustment sets
+        print(f"Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
+        print(f"Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
         
         try:
-            causal_mmm.fit(X=X, y=y, target_accept=0.95, random_seed=self.rng)
+            causal_mmm.fit(X=X, y=y, target_accept=0.95, random_seed=rng)
             causal_mmm.sample_posterior_predictive(
-                X, extend_idata=True, combined=True, random_seed=self.rng
+                X, extend_idata=True, combined=True, random_seed=rng
             )
             
-            # 检查分歧
+            # Check divergences
             divergences = causal_mmm.idata["sample_stats"]["diverging"].sum().item()
-            print(f"因果模型分歧数: {divergences}")
+            print(f"Causal model divergences: {divergences}")
             
             return causal_mmm
             
@@ -707,7 +1229,7 @@ class CausalMMMTutorial:
         
     def run_complete_tutorial(self):
         """运行完整教程"""
-        print("开始因果关系媒体混合建模教程...")
+        print("Starting Causal Media Mix Modeling tutorial...")
         
         # 1. 解释概念
         self.explain_causal_concepts()
@@ -752,8 +1274,8 @@ class CausalMMMTutorial:
 
 def main():
     """主函数"""
-    print("欢迎使用因果关系媒体混合建模教程！")
-    print("本教程将演示如何在MMM中应用因果推理概念。")
+    print("Welcome to the Causal Media Mix Modeling tutorial!")
+    print("This tutorial will demonstrate how to apply causal inference concepts in MMM.")
     print()
     
     # 创建教程实例
