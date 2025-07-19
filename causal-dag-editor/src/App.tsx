@@ -810,20 +810,6 @@ function App() {
           <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Model Training</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
-              onClick={() => setShowDAGExport(!showDAGExport)}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#4caf50',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              {showDAGExport ? 'Hide' : 'Show'} DAG Structure
-            </button>
-            <button
               onClick={trainModel}
               disabled={isTraining || nodes.length === 0}
               style={{

@@ -613,14 +613,22 @@ class CausalMMMTutorial:
             
             # 获取模型预测
             posterior_predictive = az.extract(model_result.idata, group="posterior_predictive")
-            y_pred_mean = posterior_predictive["y"].mean(dim="sample").values
-            y_pred_std = posterior_predictive["y"].std(dim="sample").values
+            y_pred_scaled = posterior_predictive["y"].mean(dim="sample").values
+            y_pred_std_scaled = posterior_predictive["y"].std(dim="sample").values
+            
+            # 反标准化预测值
+            y_pred_mean = model_result.target_transformer.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()
+            y_pred_std = y_pred_std_scaled * model_result.target_transformer.named_steps['scaler'].scale_.item()
             
             # 实际值
             y_actual = self.df['y'].values[:len(y_pred_mean)]
             
-            # 计算评估指标
-            r2 = r2_score(y_actual, y_pred_mean)
+            # 使用正确的R²计算方式
+            r2 = az.r2_score(
+                y_true=y_actual,
+                y_pred=model_result.idata.posterior_predictive.stack(sample=("chain", "draw"))["y"].values.T
+                * model_result.target_transformer.named_steps['scaler'].scale_.item(),
+            ).iloc[0]
             mape = mean_absolute_percentage_error(y_actual, y_pred_mean)
             mae = np.mean(np.abs(y_actual - y_pred_mean))
             rmse = np.sqrt(np.mean((y_actual - y_pred_mean) ** 2))
@@ -1142,11 +1150,21 @@ class CausalMMMTutorial:
             "time_varying_intercept": True,
         }
         
-        # Only add control_columns and dag if we have control variables
+        # Only add control_columns and dag if we have control variables AND they are not all zero
         if available_control_columns:
-            mmm_config["control_columns"] = available_control_columns
-            mmm_config["dag"] = causal_dag
-            print("🔍 Using causal model with control variables and DAG")
+            # Check if control variables have non-zero variance
+            non_zero_controls = []
+            for col in available_control_columns:
+                if col in X.columns and X[col].var() > 1e-10:  # Check if variance is not essentially zero
+                    non_zero_controls.append(col)
+            
+            if non_zero_controls:
+                mmm_config["control_columns"] = non_zero_controls
+                mmm_config["dag"] = causal_dag
+                print(f"🔍 Using causal model with control variables and DAG: {non_zero_controls}")
+            else:
+                print("🔍 Control variables have zero variance, using basic MMM model")
+                print("⚠️ Note: Without valid control variables, this will be a standard correlational MMM model")
         else:
             print("🔍 Using basic MMM model without control variables (no DAG constraints)")
             print("⚠️ Note: Without control variables, this will be a standard correlational MMM model")
