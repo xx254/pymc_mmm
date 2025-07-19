@@ -103,25 +103,70 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
         self.custom_dag_dot = dag_dot_string
         
     def create_dynamic_dag_string(self, dag_structure: DAGStructure) -> str:
-        """Create DOT string based on DAG structure"""
+        """Create DOT string based on DAG structure with proper variable mapping"""
         if not dag_structure.edges:
             return "digraph { }"
             
+        # Create a mapping from node IDs/labels to model variable names
+        node_mapping = {}
+        for node in dag_structure.nodes:
+            original_id = node.id
+            original_label = node.label.lower()
+            
+            # Map to standard model variable names
+            if any(keyword in original_label for keyword in ['x1', 'social media', 'social']):
+                model_var = 'x1'
+            elif any(keyword in original_label for keyword in ['x2', 'search', 'search engine']):
+                model_var = 'x2'
+            elif any(keyword in original_label for keyword in ['y', 'target', 'sales', 'outcome']):
+                model_var = 'y'
+            elif any(keyword in original_label for keyword in ['holiday', 'christmas', 'festive']):
+                model_var = 'holiday_signal'
+            elif any(keyword in original_label for keyword in ['competitor', 'competition']):
+                model_var = 'competitor_offers'
+            elif any(keyword in original_label for keyword in ['market', 'growth']):
+                model_var = 'market_growth'
+            else:
+                # Use sanitized version of original ID
+                model_var = original_id.replace(' ', '_').replace('(', '').replace(')', '').lower()
+            
+            node_mapping[original_id] = model_var
+            
+        print(f"🔍 Node mapping: {node_mapping}")
+            
         dot_string = "digraph {\n"
         
-        # Add node definitions (optional, for better visualization)
+        # Add node definitions with mapped names
         for node in dag_structure.nodes:
-            node_id = node.id.replace(' ', '_').replace('(', '').replace(')', '')
-            dot_string += f'  {node_id} [label="{node.label}"];\n'
+            model_var = node_mapping[node.id]
+            dot_string += f'  {model_var} [label="{node.label}"];\n'
         
-        # Add edges
+        # Add edges with mapped variable names
         for edge in dag_structure.edges:
-            source = edge.source.replace(' ', '_').replace('(', '').replace(')', '')
-            target = edge.target.replace(' ', '_').replace('(', '').replace(')', '')
-            dot_string += f"  {source} -> {target};\n"
+            source_var = node_mapping.get(edge.source, edge.source)
+            target_var = node_mapping.get(edge.target, edge.target)
+            dot_string += f"  {source_var} -> {target_var};\n"
         
         dot_string += "}"
+        print(f"🔍 Generated DAG string: {dot_string}")
         return dot_string
+    
+    def _extract_control_variables_from_dag_string(self, dag_string):
+        """从DAG字符串中提取控制变量"""
+        control_variables = []
+        
+        import re
+        # 查找所有边关系 (source -> target)
+        edge_pattern = r'(\w+)\s*->\s*(\w+)'
+        edges = re.findall(edge_pattern, dag_string)
+        
+        # 控制变量是那些既不是x1, x2, y的变量，但会影响它们的变量
+        for source, target in edges:
+            if source not in ['x1', 'x2', 'y'] and (target in ['x1', 'x2', 'y']):
+                if source not in control_variables:
+                    control_variables.append(source)
+        
+        return control_variables
         
     def map_dag_to_model_variables(self, dag_structure: DAGStructure) -> Dict[str, Any]:
         """Map DAG structure to model variables"""
@@ -208,14 +253,24 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
                     print(f"🔥 DEBUG: Data loading/generation failure details: {traceback.format_exc()}")
                     raise
             
+            # Generate custom DAG string from user-defined structure
+            custom_dag_string = self.create_dynamic_dag_string(dag_structure)
+            print(f"🔥 DEBUG: Generated custom DAG string: {custom_dag_string}")
+            
+            # Check if we have sufficient structure for causal modeling
+            control_vars_from_dag = self._extract_control_variables_from_dag_string(custom_dag_string)
+            has_control_variables = len(control_vars_from_dag) > 0
+            print(f"🔥 DEBUG: Control variables from DAG: {control_vars_from_dag}")
+            print(f"🔥 DEBUG: Has control variables: {has_control_variables}")
+            
             # Choose training method based on DAG type
             print(f"🔥 DEBUG: Starting model training based on DAG type {dag_type}...")
             result = None
             if dag_type == 'business':
-                # Use predefined business scenario model
-                print("🔥 DEBUG: Running business scenario model...")
+                # Use predefined business scenario model with custom DAG
+                print("🔥 DEBUG: Running business scenario model with custom DAG...")
                 try:
-                    result = self.run_causal_model(version="full")
+                    result = self.run_causal_model(version="full", custom_dag=custom_dag_string)
                     print(f"🔥 DEBUG: Business scenario model training result: {type(result)}")
                 except Exception as e:
                     error_msg = f"Business scenario model training failed: {str(e)}"
@@ -229,10 +284,10 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
                     # Re-raise exception with more context
                     raise Exception(f"{error_msg} (Exception type: {type(e).__name__})") from e
             elif dag_type == 'simple':
-                # Use simplified model
-                print("🔥 DEBUG: Running simplified model...")
+                # Use simplified model with custom DAG
+                print("🔥 DEBUG: Running simplified model with custom DAG...")
                 try:
-                    result = self.run_causal_model(version="simple")
+                    result = self.run_causal_model(version="simple", custom_dag=custom_dag_string)
                     print(f"🔥 DEBUG: Simplified model training result: {type(result)}")
                 except Exception as e:
                     error_msg = f"Simplified model training failed: {str(e)}"
@@ -246,14 +301,15 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
                     # Re-raise exception with more context
                     raise Exception(f"{error_msg} (Exception type: {type(e).__name__})") from e
             else:
-                # Custom model - use basic correlational model
-                print("🔥 DEBUG: Running custom model (basic correlational model)...")
-                logger.info("Running custom model (basic correlational model)...")
+                # Custom model - use causal model with user-defined DAG
+                print("🔥 DEBUG: Running custom causal model with user-defined DAG...")
+                logger.info("Running custom causal model with user-defined DAG...")
                 try:
-                    result = self.run_correlational_model()
-                    print(f"🔥 DEBUG: Correlational model training result: {type(result)}")
+                    # Use causal model instead of correlational for custom DAGs
+                    result = self.run_causal_model(version="custom", custom_dag=custom_dag_string)
+                    print(f"🔥 DEBUG: Custom causal model training result: {type(result)}")
                 except Exception as e:
-                    error_msg = f"Correlational model training failed: {str(e)}"
+                    error_msg = f"Custom causal model training failed: {str(e)}"
                     error_traceback = traceback.format_exc()
                     print(f"🔥 DEBUG: {error_msg}")
                     print(f"🔥 DEBUG: Exception type: {type(e).__name__}")
@@ -346,10 +402,21 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
             else:
                 print("🔥 DEBUG: Model result has no idata attribute")
             
+            # Prepare success message based on model type
+            if has_control_variables:
+                success_message = f'Causal model training completed! Used DAG structure with {len(dag_structure.nodes)} nodes and {len(dag_structure.edges)} edges. Control variables: {control_vars_from_dag}'
+                model_type = 'causal'
+            else:
+                success_message = f'MMM model training completed! Used {len(dag_structure.nodes)} nodes and {len(dag_structure.edges)} edges. Note: No control variables detected, so this is a correlational model without causal constraints.'
+                model_type = 'correlational'
+            
+            model_summary['model_type'] = model_type
+            model_summary['has_causal_constraints'] = has_control_variables
+            
             print("🔥 DEBUG: Returning success result")
             return {
                 'status': 'success',
-                'message': f'Model training completed! Used DAG structure with {len(dag_structure.nodes)} nodes and {len(dag_structure.edges)} edges.',
+                'message': success_message,
                 'model_summary': model_summary,
                 'convergence_info': convergence_info
             }

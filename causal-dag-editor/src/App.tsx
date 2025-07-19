@@ -76,6 +76,8 @@ interface TrainingResult {
   message: string;
   model_summary?: {
     dag_type?: string;
+    model_type?: 'causal' | 'correlational';
+    has_causal_constraints?: boolean;
     nodes_count?: number;
     edges_count?: number;
     treatment_variables?: string[];
@@ -932,13 +934,56 @@ function App() {
                   <strong>Model Information:</strong>
                   <div style={{ margin: '5px 0', fontSize: '10px' }}>
                     <div><strong>DAG Type:</strong> {trainingResult.model_summary.dag_type}</div>
-                    <div><strong>Node Count:</strong> {trainingResult.model_summary.nodes_count}</div>
-                    <div><strong>Edge Count:</strong> {trainingResult.model_summary.edges_count}</div>
+                    
+                    {/* Model Type Indicator */}
+                    {trainingResult.model_summary.model_type && (
+                      <div style={{ marginTop: '4px' }}>
+                        <strong>Model Type:</strong> 
+                        <span style={{ 
+                          marginLeft: '4px',
+                          padding: '2px 6px',
+                          borderRadius: '10px',
+                          fontSize: '8px',
+                          fontWeight: 'bold',
+                          backgroundColor: trainingResult.model_summary.model_type === 'causal' ? '#4caf50' : '#ff9800',
+                          color: 'white'
+                        }}>
+                          {trainingResult.model_summary.model_type === 'causal' ? '🧠 CAUSAL' : '📊 CORRELATIONAL'}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* Causal Constraints Indicator */}
+                    {trainingResult.model_summary.has_causal_constraints !== undefined && (
+                      <div style={{ marginTop: '2px', fontSize: '9px', color: '#666' }}>
+                        <strong>Causal Constraints:</strong> 
+                        <span style={{ 
+                          marginLeft: '4px',
+                          color: trainingResult.model_summary.has_causal_constraints ? '#2e7d32' : '#d32f2f'
+                        }}>
+                          {trainingResult.model_summary.has_causal_constraints ? '✅ Active' : '❌ None'}
+                        </span>
+                        {!trainingResult.model_summary.has_causal_constraints && (
+                          <div style={{ fontSize: '8px', color: '#f57c00', marginTop: '2px' }}>
+                            💡 Add control variables (like Holiday, Competitor) to enable causal constraints
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    <div style={{ marginTop: '6px' }}>
+                      <div><strong>Node Count:</strong> {trainingResult.model_summary.nodes_count}</div>
+                      <div><strong>Edge Count:</strong> {trainingResult.model_summary.edges_count}</div>
+                    </div>
+                    
                     {trainingResult.model_summary.treatment_variables && (
                       <div><strong>Treatment Variables:</strong> {trainingResult.model_summary.treatment_variables.join(', ')}</div>
                     )}
                     {trainingResult.model_summary.outcome_variables && (
                       <div><strong>Outcome Variables:</strong> {trainingResult.model_summary.outcome_variables.join(', ')}</div>
+                    )}
+                    {trainingResult.model_summary.control_variables && trainingResult.model_summary.control_variables.length > 0 && (
+                      <div><strong>Control Variables:</strong> {trainingResult.model_summary.control_variables.join(', ')}</div>
                     )}
                   </div>
                   

@@ -160,7 +160,7 @@ class CausalMMMTutorial:
     def __init__(self):
         self.seed = seed
         self.rng = rng
-        self.sample_kwargs = {"draws": 500, "chains": 4, "nuts_sampler": "numpyro"}
+        self.sample_kwargs = {"draws": 500, "chains": 4}
         self.df = None
         self.data = None
         self.date_range = None
@@ -535,6 +535,10 @@ class CausalMMMTutorial:
             if date_col != 'date':
                 self.data.rename(columns={date_col: 'date'}, inplace=True)
             
+            # 确保日期列是datetime类型
+            if 'date' in self.data.columns:
+                self.data['date'] = pd.to_datetime(self.data['date'])
+            
             print(f"✅ 模型数据准备完成")
             print(f"   数据形状: {self.data.shape}")
             print(f"   包含列: {list(self.data.columns)}")
@@ -805,6 +809,41 @@ class CausalMMMTutorial:
         self.df["holiday_signal"] = holiday_signal
         self.df["holiday_contributions"] = holiday_contributions
         
+    def _extract_control_variables_from_dag(self, dag_string):
+        """从DAG字符串中提取控制变量"""
+        control_variables = []
+        
+        # 解析DAG字符串，查找可能的控制变量
+        # 控制变量通常是指向x1, x2, y的外生变量
+        
+        import re
+        # 查找所有边关系 (source -> target)
+        edge_pattern = r'(\w+)\s*->\s*(\w+)'
+        edges = re.findall(edge_pattern, dag_string)
+        
+        # 收集所有指向处理变量(x1, x2)和结果变量(y)的变量
+        sources_to_treatments = set()
+        sources_to_outcome = set()
+        
+        for source, target in edges:
+            if target in ['x1', 'x2']:
+                sources_to_treatments.add(source)
+            elif target in ['y']:
+                sources_to_outcome.add(source)
+        
+        # 控制变量是那些既不是x1, x2, y的变量，但会影响它们的变量
+        for source, target in edges:
+            if source not in ['x1', 'x2', 'y'] and (target in ['x1', 'x2', 'y']):
+                if source not in control_variables:
+                    control_variables.append(source)
+        
+        print(f"🔍 Extracted edges: {edges}")
+        print(f"🔍 Sources to treatments: {sources_to_treatments}")
+        print(f"🔍 Sources to outcome: {sources_to_outcome}")
+        print(f"🔍 Identified control variables: {control_variables}")
+        
+        return control_variables
+    
     def _generate_competitor_offers(self, n):
         """生成竞争对手优惠数据"""
         A = 0.5  # 振幅
@@ -1029,14 +1068,18 @@ class CausalMMMTutorial:
         else:
             raise ValueError("版本必须是 'simple', 'confounded', 或 'full'")
             
-    def run_causal_model(self, version="full"):
-        """Run causal model using user-specified configuration"""
+    def run_causal_model(self, version="full", custom_dag=None):
+        """Run causal model using user-specified configuration
+        
+        Args:
+            version: Model version ('full', 'simple', etc.)
+            custom_dag: User-defined DAG string from UI drag-and-drop. If None, uses default DAG.
+        """
         if not PYMC_MARKETING_AVAILABLE:
             print("Skipping causal model - PyMC-Marketing not available")
             return None
             
         print(f"\n7. Causal model ({version}):")
-        print("Running causal model with user-specified DAG...")
         
         # Prepare data exactly as user specified
         print(f"🔍 Available data columns: {list(self.data.columns)}")
@@ -1045,57 +1088,87 @@ class CausalMMMTutorial:
         print(f"🔍 Feature columns (X): {list(X.columns)}")
         print(f"🔍 Target column shape: {y.shape}")
         
-        # Define causal DAG exactly as user specified
-        causal_dag = """
-        digraph {
-            x1 -> y;
-            x2 -> y;
-            x1 -> x2;
-            holiday_signal -> y;
-            holiday_signal -> x1;
-            holiday_signal -> x2;
-            competitor_offers -> x2;
-            competitor_offers -> y;
-            market_growth -> y;
-        }
-        """
+        # Use custom DAG if provided, otherwise use default DAG
+        if custom_dag is not None:
+            causal_dag = custom_dag
+            print("Using user-defined DAG from UI drag-and-drop...")
+            print(f"User DAG: {causal_dag}")
+        else:
+            # Define default causal DAG
+            causal_dag = """
+            digraph {
+                x1 -> y;
+                x2 -> y;
+                x1 -> x2;
+                holiday_signal -> y;
+                holiday_signal -> x1;
+                holiday_signal -> x2;
+                competitor_offers -> x2;
+                competitor_offers -> y;
+                market_growth -> y;
+            }
+            """
+            print("Using default DAG...")
         
-        # Determine available control columns
+        # Determine available control columns from custom DAG
         available_control_columns = []
-        potential_controls = ["holiday_signal"]
-        for col in potential_controls:
-            if col in X.columns:
-                available_control_columns.append(col)
+        
+        if custom_dag is not None:
+            # Extract control variables from custom DAG
+            control_vars_from_dag = self._extract_control_variables_from_dag(custom_dag)
+            print(f"🔍 Control variables extracted from custom DAG: {control_vars_from_dag}")
+            
+            # Check which control variables are available in data
+            for col in control_vars_from_dag:
+                if col in X.columns:
+                    available_control_columns.append(col)
+        else:
+            # Use default control variables
+            potential_controls = ["holiday_signal"]
+            for col in potential_controls:
+                if col in X.columns:
+                    available_control_columns.append(col)
         
         print(f"🔍 Available control columns: {available_control_columns}")
         
-        # Create model with user-specified configuration
-        causal_mmm = MMM(
-            sampler_config=self.sample_kwargs,
-            date_column="date",
-            adstock=GeometricAdstock(l_max=24),
-            saturation=MichaelisMentenSaturation(),
-            channel_columns=["x1", "x2"],
-            control_columns=available_control_columns,
-            # Define the outcome node and the causal DAG
-            outcome_node="y",
-            dag=causal_dag,
-            # Time varying intercept to account for the unobserved confounder
-            time_varying_intercept=True,
-        )
+        # Create model configuration based on available control columns
+        mmm_config = {
+            "sampler_config": self.sample_kwargs,
+            "date_column": "date",
+            "adstock": GeometricAdstock(l_max=24),
+            "saturation": MichaelisMentenSaturation(),
+            "channel_columns": ["x1", "x2"],
+            "outcome_node": "y",
+            "time_varying_intercept": True,
+        }
+        
+        # Only add control_columns and dag if we have control variables
+        if available_control_columns:
+            mmm_config["control_columns"] = available_control_columns
+            mmm_config["dag"] = causal_dag
+            print("🔍 Using causal model with control variables and DAG")
+        else:
+            print("🔍 Using basic MMM model without control variables (no DAG constraints)")
+            print("⚠️ Note: Without control variables, this will be a standard correlational MMM model")
+        
+        # Create model with appropriate configuration
+        causal_mmm = MMM(**mmm_config)
         
         # Apply user-specified model configuration
         causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
         causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
         
-        # Display adjustment sets
-        print(f"Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
-        print(f"Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
+        # Display adjustment sets (only if causal model with DAG)
+        if hasattr(causal_mmm, 'causal_graphical_model') and causal_mmm.causal_graphical_model is not None:
+            print(f"🔍 Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
+            print(f"🔍 Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
+        else:
+            print("🔍 No causal graphical model (basic MMM mode without DAG constraints)")
         
         try:
-            causal_mmm.fit(X=X, y=y, target_accept=0.95, random_seed=rng)
+            causal_mmm.fit(X=X, y=y, target_accept=0.95, random_seed=self.rng)
             causal_mmm.sample_posterior_predictive(
-                X, extend_idata=True, combined=True, random_seed=rng
+                X, extend_idata=True, combined=True, random_seed=self.rng
             )
             
             # Check divergences
@@ -1112,6 +1185,15 @@ class CausalMMMTutorial:
         """比较不同模型的效果"""
         if not PYMC_MARKETING_AVAILABLE or correlational_mmm is None or causal_mmm is None:
             print("跳过模型比较 - 模型不可用")
+            return
+        
+        # Check if both models have fit_result
+        if not hasattr(correlational_mmm, 'fit_result') or correlational_mmm.fit_result is None:
+            print("跳过模型比较 - 相关性模型尚未训练完成")
+            return
+            
+        if not hasattr(causal_mmm, 'fit_result') or causal_mmm.fit_result is None:
+            print("跳过模型比较 - 因果模型尚未训练完成")
             return
             
         print("\n8. 模型比较:")
@@ -1186,9 +1268,23 @@ class CausalMMMTutorial:
         if not PYMC_MARKETING_AVAILABLE or causal_mmm is None:
             print("跳过时变截距绘图 - 模型不可用")
             return
+        
+        # Check if this is a causal model with time-varying intercept
+        if not hasattr(causal_mmm, 'causal_graphical_model') or causal_mmm.causal_graphical_model is None:
+            print("跳过时变截距绘图 - 此模型没有因果约束或时变截距")
+            return
             
         print("\n9. 时变截距分析:")
         print("时变截距可以捕捉未观测到的混淆因子...")
+        
+        # Check if intercept exists in fit_result
+        if not hasattr(causal_mmm, 'fit_result') or causal_mmm.fit_result is None:
+            print("模型尚未训练完成，无法分析时变截距")
+            return
+            
+        if "intercept" not in causal_mmm.fit_result:
+            print("此模型没有时变截距数据")
+            return
         
         # 恢复截距效果
         intercept_effect = (
@@ -1227,8 +1323,12 @@ class CausalMMMTutorial:
         plt.savefig("time_varying_intercept.png", dpi=300, bbox_inches='tight')
         plt.show()
         
-    def run_complete_tutorial(self):
-        """运行完整教程"""
+    def run_complete_tutorial(self, custom_dag=None):
+        """运行完整教程
+        
+        Args:
+            custom_dag: 用户自定义的DAG字符串，如果为None则使用默认DAG
+        """
         print("Starting Causal Media Mix Modeling tutorial...")
         
         # 1. 解释概念
@@ -1246,8 +1346,8 @@ class CausalMMMTutorial:
         # 5. 运行相关性模型
         correlational_mmm = self.run_correlational_model()
         
-        # 6. 运行因果模型
-        causal_mmm = self.run_causal_model(version="full")
+        # 6. 运行因果模型 - 支持用户自定义DAG
+        causal_mmm = self.run_causal_model(version="full", custom_dag=custom_dag)
         
         # 7. 比较模型
         self.compare_models(correlational_mmm, causal_mmm)
