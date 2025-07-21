@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, DragEvent } from 'react';
+import React, { CSSProperties, useCallback, useState, useRef, DragEvent } from 'react';
 import ReactFlow, {
   MiniMap,
   Controls,
@@ -324,63 +324,63 @@ const businessScenarioEdges: Edge[] = [
     id: 'christmas-x1',
     source: 'christmas',
     target: 'x1',
-    style: { stroke: '#f57f17', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
   {
     id: 'christmas-x2',
     source: 'christmas',
     target: 'x2',
-    style: { stroke: '#f57f17', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
   {
     id: 'competitor-x2',
     source: 'competitor',
     target: 'x2',
-    style: { stroke: '#f57c00', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
   {
     id: 'x1-x2',
     source: 'x1',
     target: 'x2',
-    style: { stroke: '#1976d2', strokeWidth: 2 },
-    animated: true,
+    style: { stroke: '#222', strokeWidth: 2 } as CSSProperties,
+    animated: false,
   },
   {
     id: 'christmas-target',
     source: 'christmas',
     target: 'target',
-    style: { stroke: '#f57f17', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
   {
     id: 'x1-target',
     source: 'x1',
     target: 'target',
-    style: { stroke: '#1976d2', strokeWidth: 3 },
-    animated: true,
+    style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
+    animated: false,
   },
   {
     id: 'x2-target',
     source: 'x2',
     target: 'target',
-    style: { stroke: '#7b1fa2', strokeWidth: 3 },
-    animated: true,
+    style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
+    animated: false,
   },
   {
     id: 'competitor-target',
     source: 'competitor',
     target: 'target',
-    style: { stroke: '#f57c00', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
   {
     id: 'market-target',
     source: 'market_growth',
     target: 'target',
-    style: { stroke: '#388e3c', strokeWidth: 2, strokeDasharray: '5,5' },
+    style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
   },
 ];
@@ -434,19 +434,31 @@ const simpleDagEdges: Edge[] = [
     id: 'x1-y-simple',
     source: 'x1_simple',
     target: 'y_simple',
-    style: { stroke: '#1976d2', strokeWidth: 3 },
-    animated: true,
+    style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
+    animated: false,
   },
   {
     id: 'x2-y-simple',
     source: 'x2_simple',
     target: 'y_simple',
-    style: { stroke: '#7b1fa2', strokeWidth: 3 },
-    animated: true,
+    style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
+    animated: false,
   },
 ];
 
 let nodeId = 1000; // For generating new node IDs
+
+// 判断节点是否为confounder
+const isConfounder = (label: string) => {
+  const l = label.toLowerCase();
+  return (
+    l.includes('confound') ||
+    l.includes('christmas') ||
+    l.includes('competitor') ||
+    l.includes('market growth') ||
+    l.includes('holiday')
+  );
+};
 
 function App() {
   const [dagType, setDagType] = useState<'business' | 'simple' | 'custom'>('business');
@@ -461,8 +473,28 @@ function App() {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const onConnect = useCallback(
-    (params: Edge | Connection) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges]
+    (params: Edge | Connection) => {
+      // 只处理source/target都为string的情况
+      if (!params.source || !params.target) return;
+      const sourceNode = nodes.find(n => n.id === params.source);
+      let edgeStyle: CSSProperties = { stroke: '#222', strokeWidth: 2 };
+      if (sourceNode) {
+        const label = sourceNode.data.label || '';
+        if (isConfounder(label)) {
+          edgeStyle = { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' };
+        }
+      }
+      const newEdge: Edge = {
+        ...params,
+        id: `edge_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        style: edgeStyle,
+        animated: false,
+        source: params.source as string,
+        target: params.target as string,
+      };
+      setEdges((eds) => addEdge(newEdge, eds));
+    },
+    [setEdges, nodes]
   );
 
   const onInit = (rfi: ReactFlowInstance) => setReactFlowInstance(rfi);
@@ -689,54 +721,6 @@ function App() {
       }}>
         <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>Causal DAG Editor</h3>
         
-        {/* DAG template selection */}
-        <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Template Selection</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button
-              onClick={() => switchDAG('business')}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: dagType === 'business' ? '#2196f3' : '#f5f5f5',
-                color: dagType === 'business' ? 'white' : '#333',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              Business Scenario DAG
-            </button>
-            <button
-              onClick={() => switchDAG('simple')}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: dagType === 'simple' ? '#2196f3' : '#f5f5f5',
-                color: dagType === 'simple' ? 'white' : '#333',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              Simplified DAG
-            </button>
-            <button
-              onClick={() => switchDAG('custom')}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: dagType === 'custom' ? '#2196f3' : '#f5f5f5',
-                color: dagType === 'custom' ? 'white' : '#333',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              Custom DAG
-            </button>
-          </div>
-        </div>
 
         {/* Node toolbox */}
         <div style={{ marginBottom: '25px' }}>
