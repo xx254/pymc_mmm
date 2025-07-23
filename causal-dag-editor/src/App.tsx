@@ -14,6 +14,7 @@ import ReactFlow, {
   NodeMouseHandler,
   EdgeMouseHandler,
   ReactFlowInstance,
+  MarkerType,
 } from 'reactflow';
 
 import {
@@ -326,6 +327,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'x1',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'christmas-x2',
@@ -333,6 +335,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'x2',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'competitor-x2',
@@ -340,6 +343,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'x2',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'x1-x2',
@@ -347,6 +351,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'x2',
     style: { stroke: '#222', strokeWidth: 2 } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'christmas-target',
@@ -354,6 +359,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'target',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'x1-target',
@@ -361,6 +367,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'target',
     style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'x2-target',
@@ -368,6 +375,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'target',
     style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'competitor-target',
@@ -375,6 +383,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'target',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'market-target',
@@ -382,6 +391,7 @@ const businessScenarioEdges: Edge[] = [
     target: 'target',
     style: { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
 ];
 
@@ -436,6 +446,7 @@ const simpleDagEdges: Edge[] = [
     target: 'y_simple',
     style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
   {
     id: 'x2-y-simple',
@@ -443,6 +454,7 @@ const simpleDagEdges: Edge[] = [
     target: 'y_simple',
     style: { stroke: '#222', strokeWidth: 3 } as CSSProperties,
     animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
   },
 ];
 
@@ -491,6 +503,7 @@ function App() {
         animated: false,
         source: params.source as string,
         target: params.target as string,
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
       };
       setEdges((eds) => addEdge(newEdge, eds));
     },
@@ -1349,6 +1362,10 @@ function App() {
           onNodeClick={onNodeClick}
           onEdgeClick={onEdgeClick}
           onPaneClick={onPaneClick}
+          defaultEdgeOptions={{
+            type: 'default',
+            markerEnd: 'arrowclosed',
+          }}
           fitView
           style={{ background: '#f8f9fa' }}
         >

@@ -158,13 +158,32 @@ class CausalMMMTutorial:
     """Causal Media Mix Modeling Tutorial Class"""
     
     def __init__(self):
-        self.seed = seed
-        self.rng = rng
-        self.sample_kwargs = {"draws": 500, "chains": 4}
+        """Initialize tutorial"""
         self.df = None
         self.data = None
         self.date_range = None
+        self.rng = 42  # 使用简单的整数作为种子而不是生成器对象
         
+        # 设置采样参数
+        self.sample_kwargs = {
+            "draws": 1000,       # 增加采样次数以提高有效样本量
+            "tune": 1000,        # 增加调优步数以提高收敛性
+            "chains": 4,         # 保持4条链以确保收敛诊断
+            "nuts_sampler": "numpyro",  # 使用更快的numpyro采样器
+            "target_accept": 0.9,  # 稍微降低目标接受率以加快收敛
+            "return_inferencedata": True,
+            "random_seed": 42    # 使用整数种子
+        }
+        
+        # 尝试加载真实数据
+        try:
+            self.load_real_mmm_data()
+        except Exception as e:
+            print(f"Warning: Could not load real data: {e}")
+            print("Will generate synthetic data instead")
+            self.df = None
+            self.data = None
+    
     def explain_causal_concepts(self):
         """Explain the core concepts of causal identification"""
         print("="*80)
@@ -246,95 +265,33 @@ class CausalMMMTutorial:
             return self.generate_synthetic_data_fallback()
     
     def load_real_mmm_data(self):
-        """Load real MMM data"""
-        print("Attempting to load PyMC-Marketing MMM dataset...")
-        
-        # 首先尝试加载详细的ROAS数据
+        """加载真实的MMM数据"""
         try:
-            data_path = "data/mmm_roas_data.csv"
+            # 读取CSV文件
+            data_path = 'data/data_mmm.csv'  # 使用 data_mmm.csv
             self.df = pd.read_csv(data_path)
             
-            # 转换日期列
-            self.df['date'] = pd.to_datetime(self.df['date'])
-            self.df['date_week'] = self.df['date']
+            # 确保日期列是datetime类型
+            if 'date_week' in self.df.columns:
+                self.df['date_week'] = pd.to_datetime(self.df['date_week'])
+                self.date_range = self.df['date_week']
             
-            # 重命名列以匹配我们的模型
-            if 'y' in self.df.columns and 'target' not in self.df.columns:
-                self.df['target'] = self.df['y']
+            # 准备模型数据
+            self.data = self.df.copy()
+            if 'date_week' in self.data.columns:
+                self.data.rename(columns={'date_week': 'date'}, inplace=True)
             
-            # 确保必要的列存在
-            required_cols = ['x1', 'x2', 'target']
-            missing_cols = [col for col in required_cols if col not in self.df.columns]
-            if missing_cols:
-                raise ValueError(f"缺少必要的列: {missing_cols}")
-                
-            # 添加时间特征
-            if 'dayofyear' not in self.df.columns:
-                self.df['dayofyear'] = self.df['date'].dt.dayofyear
-            if 't' not in self.df.columns:
-                self.df['t'] = range(len(self.df))
-                
-            print(f"✅ Successfully loaded ROAS data: {data_path}")
-            print(f"📊 Number of observations: {len(self.df)}")
-            print(f"📅 Time range: {self.df['date'].min()} to {self.df['date'].max()}")
-            print(f"📋 Data columns: {list(self.df.columns)}")
-            
-            # 设置date_range用于兼容性
-            self.date_range = self.df['date']
-            
-            # 设置self.data用于模型训练
-            self._prepare_model_data()
+            print("✅ 成功加载真实数据!")
+            print(f"   数据形状: {self.data.shape}")
+            print(f"   列: {list(self.data.columns)}")
+            if 'y' in self.data.columns:
+                print(f"   目标变量统计: 均值={self.data['y'].mean():.2f}, 标准差={self.data['y'].std():.2f}")
             
             return self.df
             
         except Exception as e:
-            print(f"Failed to load ROAS data: {e}")
-            # 尝试基础MMM数据
-            try:
-                data_path = "data/mmm_example.csv"
-                self.df = pd.read_csv(data_path)
-                
-                # 转换日期列
-                if 'date_week' in self.df.columns:
-                    self.df['date_week'] = pd.to_datetime(self.df['date_week'])
-                    self.df['date'] = self.df['date_week']
-                
-                # 重命名目标变量
-                if 'y' in self.df.columns and 'target' not in self.df.columns:
-                    self.df['target'] = self.df['y']
-                
-                # 添加缺失的列
-                if 'christmas' not in self.df.columns:
-                    # 基于日期生成圣诞节标记
-                    self.df['christmas'] = ((self.df['date'].dt.month == 12) & 
-                                           (self.df['date'].dt.day >= 20)).astype(int)
-                
-                if 'competitor' not in self.df.columns:
-                    # 使用现有的event列或生成随机竞争对手数据
-                    if 'event_1' in self.df.columns:
-                        self.df['competitor'] = self.df['event_1']
-                    else:
-                        np.random.seed(42)
-                        self.df['competitor'] = np.random.beta(2, 5, len(self.df))
-                
-                if 'market_growth' not in self.df.columns:
-                    # 生成市场增长趋势
-                    self.df['market_growth'] = np.linspace(0.8, 1.2, len(self.df))
-                
-                print(f"✅ 成功加载基础MMM数据: {data_path}")
-                print(f"📊 观测数量: {len(self.df)}")
-                print(f"📋 数据列: {list(self.df.columns)}")
-                
-                # 设置date_range用于兼容性
-                self.date_range = self.df['date']
-                
-                # 设置self.data用于模型训练
-                self._prepare_model_data()
-                
-                return self.df
-                
-            except Exception as e2:
-                raise Exception(f"所有真实数据加载失败 - ROAS: {e}, 基础: {e2}")
+            print(f"❌ 加载真实数据失败: {e}")
+            raise
     
     def generate_synthetic_data_fallback(self):
         """Generate synthetic data using the exact user specification"""
@@ -374,6 +331,7 @@ class CausalMMMTutorial:
         self.df["holiday_contributions"] = holiday_signal * 0.5  # Scale factor
         
         # Generate competitor offers
+        rng = np.random.default_rng(self.rng)
         competitor_base = pz.Normal(mu=2, sigma=0.5).rvs(n, random_state=rng)
         competitor_conv = np.convolve(competitor_base, np.ones(7) / 7, mode="same")
         self.df["competitor_offers"] = competitor_conv
@@ -866,13 +824,13 @@ class CausalMMMTutorial:
         try:
             x1 = np.random.normal(loc=5, scale=3, size=n)
         except:
-            x1 = self.rng.normal(loc=5, scale=3, size=n)
+            x1 = rng.normal(loc=5, scale=3, size=n)
             
         cofounder_effect_holiday_x1 = 2.5
         x1_conv = np.convolve(x1, np.ones(14) / 14, mode="same")
         
         # 处理边界效应
-        noise = self.rng.normal(loc=0, scale=0.1, size=28)
+        noise = rng.normal(loc=0, scale=0.1, size=28)
         x1_conv[:14] = x1_conv.mean() + noise[:14]
         x1_conv[-14:] = x1_conv.mean() + noise[14:]
         
@@ -882,14 +840,14 @@ class CausalMMMTutorial:
         try:
             x2 = np.random.normal(loc=5, scale=2, size=n)
         except:
-            x2 = self.rng.normal(loc=5, scale=2, size=n)
+            x2 = rng.normal(loc=5, scale=2, size=n)
             
         cofounder_effect_holiday_x2 = 2.2
         cofounder_effect_x1_x2 = 1.3
         cofounder_effect_competitor_offers_x2 = -0.7
         
         x2_conv = np.convolve(x2, np.ones(18) / 12, mode="same")
-        noise = self.rng.normal(loc=0, scale=0.1, size=28)
+        noise = rng.normal(loc=0, scale=0.1, size=28)
         x2_conv[:14] = x2_conv.mean() + noise[:14]
         x2_conv[-14:] = x2_conv.mean() + noise[14:]
         
@@ -938,7 +896,7 @@ class CausalMMMTutorial:
     def _generate_target_variable(self, n):
         """生成目标变量"""
         self.df["intercept"] = 1.5
-        self.df["epsilon"] = self.rng.normal(loc=0.0, scale=0.08, size=n)
+        self.df["epsilon"] = rng.normal(loc=0.0, scale=0.08, size=n)
         
         self.df["y"] = (
             self.df["intercept"]
@@ -1089,114 +1047,126 @@ class CausalMMMTutorial:
             
         print(f"\n7. Causal model ({version}):")
         
-        # Prepare data exactly as user specified
-        print(f"🔍 Available data columns: {list(self.data.columns)}")
-        X = self.data.drop("y", axis=1)  # Remove target column
-        y = self.data["y"]
-        print(f"🔍 Feature columns (X): {list(X.columns)}")
-        print(f"🔍 Target column shape: {y.shape}")
-        
-        # Use custom DAG if provided, otherwise use default DAG
-        if custom_dag is not None:
-            causal_dag = custom_dag
-            print("Using user-defined DAG from UI drag-and-drop...")
-            print(f"User DAG: {causal_dag}")
-        else:
-            # Define default causal DAG
-            causal_dag = """
-            digraph {
-                x1 -> y;
-                x2 -> y;
-                x1 -> x2;
-                holiday_signal -> y;
-                holiday_signal -> x1;
-                holiday_signal -> x2;
-                competitor_offers -> x2;
-                competitor_offers -> y;
-                market_growth -> y;
-            }
-            """
-            print("Using default DAG...")
-        
-        # Determine available control columns from custom DAG
-        available_control_columns = []
-        
-        if custom_dag is not None:
-            # Extract control variables from custom DAG
-            control_vars_from_dag = self._extract_control_variables_from_dag(custom_dag)
-            print(f"🔍 Control variables extracted from custom DAG: {control_vars_from_dag}")
-            
-            # Check which control variables are available in data
-            for col in control_vars_from_dag:
-                if col in X.columns:
-                    available_control_columns.append(col)
-        else:
-            # Use default control variables
-            potential_controls = ["holiday_signal"]
-            for col in potential_controls:
-                if col in X.columns:
-                    available_control_columns.append(col)
-        
-        print(f"🔍 Available control columns: {available_control_columns}")
-        
-        # Create model configuration based on available control columns
-        mmm_config = {
-            "sampler_config": self.sample_kwargs,
-            "date_column": "date",
-            "adstock": GeometricAdstock(l_max=24),
-            "saturation": MichaelisMentenSaturation(),
-            "channel_columns": ["x1", "x2"],
-            "outcome_node": "y",
-            "time_varying_intercept": True,
-        }
-        
-        # Only add control_columns and dag if we have control variables AND they are not all zero
-        if available_control_columns:
-            # Check if control variables have non-zero variance
-            non_zero_controls = []
-            for col in available_control_columns:
-                if col in X.columns and X[col].var() > 1e-10:  # Check if variance is not essentially zero
-                    non_zero_controls.append(col)
-            
-            if non_zero_controls:
-                mmm_config["control_columns"] = non_zero_controls
-                mmm_config["dag"] = causal_dag
-                print(f"🔍 Using causal model with control variables and DAG: {non_zero_controls}")
-            else:
-                print("🔍 Control variables have zero variance, using basic MMM model")
-                print("⚠️ Note: Without valid control variables, this will be a standard correlational MMM model")
-        else:
-            print("🔍 Using basic MMM model without control variables (no DAG constraints)")
-            print("⚠️ Note: Without control variables, this will be a standard correlational MMM model")
-        
-        # Create model with appropriate configuration
-        causal_mmm = MMM(**mmm_config)
-        
-        # Apply user-specified model configuration
-        causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
-        causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
-        
-        # Display adjustment sets (only if causal model with DAG)
-        if hasattr(causal_mmm, 'causal_graphical_model') and causal_mmm.causal_graphical_model is not None:
-            print(f"🔍 Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
-            print(f"🔍 Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
-        else:
-            print("🔍 No causal graphical model (basic MMM mode without DAG constraints)")
-        
         try:
-            causal_mmm.fit(X=X, y=y, target_accept=0.95, random_seed=self.rng)
-            causal_mmm.sample_posterior_predictive(
-                X, extend_idata=True, combined=True, random_seed=self.rng
-            )
+            # Prepare data exactly as user specified
+            print(f"🔍 Available data columns: {list(self.data.columns)}")
+            X = self.data.drop("y", axis=1)  # Remove target column
+            y = self.data["y"]
+            print(f"🔍 Feature columns (X): {list(X.columns)}")
+            print(f"🔍 Target column shape: {y.shape}")
             
-            # Check divergences
-            divergences = causal_mmm.idata["sample_stats"]["diverging"].sum().item()
-            print(f"Causal model divergences: {divergences}")
+            # Use custom DAG if provided, otherwise use default DAG
+            if custom_dag is not None:
+                causal_dag = custom_dag
+                print("Using user-defined DAG from UI drag-and-drop...")
+                print(f"User DAG: {causal_dag}")
+            else:
+                # Define default causal DAG
+                causal_dag = """
+                digraph {
+                    x1 -> y;
+                    x2 -> y;
+                    x1 -> x2;
+                    holiday_signal -> y;
+                    holiday_signal -> x1;
+                    holiday_signal -> x2;
+                    competitor_offers -> x2;
+                    competitor_offers -> y;
+                    market_growth -> y;
+                }
+                """
+                print("Using default DAG...")
             
-            return causal_mmm
+            # Determine available control columns from custom DAG
+            available_control_columns = []
             
+            if custom_dag is not None:
+                # Extract control variables from custom DAG
+                control_vars_from_dag = self._extract_control_variables_from_dag(custom_dag)
+                print(f"🔍 Control variables extracted from custom DAG: {control_vars_from_dag}")
+                
+                # Check which control variables are available in data
+                for col in control_vars_from_dag:
+                    if col in X.columns:
+                        available_control_columns.append(col)
+            else:
+                # Use default control variables
+                potential_controls = ["holiday_signal"]
+                for col in potential_controls:
+                    if col in X.columns:
+                        available_control_columns.append(col)
+            
+            print(f"🔍 Available control columns: {available_control_columns}")
+            
+            # Create model configuration based on available control columns
+            mmm_config = {
+                "sampler_config": self.sample_kwargs,
+                "date_column": "date",
+                "adstock": GeometricAdstock(l_max=24),
+                "saturation": MichaelisMentenSaturation(),
+                "channel_columns": ["x1", "x2"],
+                "outcome_node": "y",
+                "time_varying_intercept": True,
+            }
+            
+            # Only add control_columns and dag if we have control variables AND they are not all zero
+            if available_control_columns:
+                # Check if control variables have non-zero variance
+                non_zero_controls = []
+                for col in available_control_columns:
+                    if col in X.columns and X[col].var() > 1e-10:  # Check if variance is not essentially zero
+                        non_zero_controls.append(col)
+                
+                if non_zero_controls:
+                    mmm_config["control_columns"] = non_zero_controls
+                    mmm_config["dag"] = causal_dag
+                    print(f"🔍 Using causal model with control variables and DAG: {non_zero_controls}")
+                else:
+                    print("🔍 Control variables have zero variance, using basic MMM model")
+                    print("⚠️ Note: Without valid control variables, this will be a standard correlational MMM model")
+            else:
+                print("🔍 Using basic MMM model without control variables (no DAG constraints)")
+                print("⚠️ Note: Without control variables, this will be a standard correlational MMM model")
+            
+            # Create model with appropriate configuration
+            causal_mmm = MMM(**mmm_config)
+            
+            # Apply user-specified model configuration
+            causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
+            causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
+            
+            # Display adjustment sets (only if causal model with DAG)
+            if hasattr(causal_mmm, 'causal_graphical_model') and causal_mmm.causal_graphical_model is not None:
+                print(f"🔍 Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
+                print(f"🔍 Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
+            else:
+                print("🔍 No causal graphical model (basic MMM mode without DAG constraints)")
+            
+            try:
+                # 使用固定的随机种子进行训练
+                causal_mmm.fit(X=X, y=y, target_accept=0.9, random_seed=42)
+                causal_mmm.sample_posterior_predictive(
+                    X, extend_idata=True, combined=True, random_seed=42
+                )
+                
+                # Check divergences
+                divergences = causal_mmm.idata["sample_stats"]["diverging"].sum().item()
+                print(f"Causal model divergences: {divergences}")
+                
+                return causal_mmm
+                
+            except Exception as e:
+                print(f"Model training failed: {str(e)}")
+                print("Detailed traceback:")
+                import traceback
+                print(traceback.format_exc())
+                return None
+                
         except Exception as e:
-            print(f"因果模型训练失败: {e}")
+            print(f"Error in run_causal_model: {str(e)}")
+            print("Detailed traceback:")
+            import traceback
+            print(traceback.format_exc())
             return None
             
     def compare_models(self, correlational_mmm, causal_mmm):
