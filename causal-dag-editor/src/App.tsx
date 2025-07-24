@@ -485,6 +485,8 @@ function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [useCustomData, setUseCustomData] = useState(false);
+  const [fileSchema, setFileSchema] = useState<string[] | null>(null);
+  const [isParsingFile, setIsParsingFile] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const onConnect = useCallback(
@@ -640,7 +642,25 @@ function App() {
   };
 
   // File upload handlers
-  const handleFileUpload = (file: File) => {
+  const parseCSVHeaders = (file: File): Promise<string[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const firstLine = text.split('\n')[0];
+          const headers = firstLine.split(',').map(header => header.trim().replace(/"/g, ''));
+          resolve(headers);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  };
+
+  const handleFileUpload = async (file: File) => {
     if (file.type !== 'text/csv' && !file.name.endsWith('.csv')) {
       alert('Please upload a CSV file only.');
       return;
@@ -651,9 +671,34 @@ function App() {
       return;
     }
     
-    setUploadedFile(file);
-    setUseCustomData(true);
-    console.log('File uploaded:', file.name);
+    setIsParsingFile(true);
+    try {
+      const headers = await parseCSVHeaders(file);
+      setFileSchema(headers);
+      setUploadedFile(file);
+      setUseCustomData(true);
+      
+      // Ask user if they want to clear the current DAG to start fresh
+      if (nodes.length > 0) {
+        const shouldClear = window.confirm(
+          'You have an existing DAG. Would you like to clear it and start fresh with your new data columns?'
+        );
+        if (shouldClear) {
+          setNodes([]);
+          setEdges([]);
+          setSelectedNodes([]);
+          setSelectedEdges([]);
+        }
+      }
+      
+      console.log('File uploaded:', file.name);
+      console.log('CSV headers:', headers);
+    } catch (error) {
+      console.error('Error parsing CSV headers:', error);
+      alert('Error reading CSV file. Please check the file format.');
+    } finally {
+      setIsParsingFile(false);
+    }
   };
 
   const handleFileDragOver = (e: React.DragEvent) => {
@@ -686,6 +731,7 @@ function App() {
   const removeUploadedFile = () => {
     setUploadedFile(null);
     setUseCustomData(false);
+    setFileSchema(null);
   };
 
   // Drag and drop to add nodes
@@ -708,22 +754,30 @@ function App() {
         y: event.clientY,
       });
 
-      const template = nodeTemplates.find(t => t.type === type);
+      let template: NodeTemplate | undefined;
+      
+      if (fileSchema && fileSchema.includes(type)) {
+        // Handle CSV column names
+        const dynamicTemplates = createDynamicNodeTemplates(fileSchema);
+        template = dynamicTemplates.find(t => t.type === type);
+      } else {
+        // Handle default node templates
+        template = nodeTemplates.find(t => t.type === type);
+      }
+      
       if (!template) return;
 
       const newNode: Node = {
         id: `${type}_${nodeId++}`,
         type: 'default',
         position,
-        data: { label: `New ${template.label}` },
+        data: { label: template.label },
         style: template.style,
-        sourcePosition: Position.Bottom,
-        targetPosition: Position.Top,
       };
 
       setNodes((nds) => nds.concat(newNode));
     },
-    [reactFlowInstance, setNodes]
+    [reactFlowInstance, setNodes, fileSchema]
   );
 
   const onDragStart = (event: DragEvent, nodeType: string) => {
@@ -790,6 +844,259 @@ function App() {
     setTrainingResult(null);
   };
 
+  // Helper function to guess variable type based on column name
+  const guessVariableType = (columnName: string): 'treatment' | 'outcome' | 'confounder' | 'mediator' => {
+    const name = columnName.toLowerCase();
+    
+    // Treatment variables (marketing channels)
+    if (name.includes('x1') || name.includes('x2') || 
+        name.includes('social') || name.includes('search') || 
+        name.includes('tv') || name.includes('radio') || 
+        name.includes('display') || name.includes('video') ||
+        name.includes('channel') || name.includes('campaign') ||
+        name.includes('ad') || name.includes('marketing') ||
+        name.includes('facebook') || name.includes('google') ||
+        name.includes('instagram') || name.includes('tiktok')) {
+      return 'treatment';
+    }
+    
+    // Outcome variables
+    if (name.includes('y') || name.includes('target') || 
+        name.includes('sales') || name.includes('revenue') || 
+        name.includes('conversion') || name.includes('purchase') ||
+        name.includes('order') || name.includes('transaction')) {
+      return 'outcome';
+    }
+    
+    // Confounder variables
+    if (name.includes('holiday') || name.includes('season') || 
+        name.includes('competitor') || name.includes('event') || 
+        name.includes('weather') || name.includes('trend') ||
+        name.includes('macro') || name.includes('gdp') ||
+        name.includes('index')) {
+      return 'confounder';
+    }
+    
+    // Default to mediator for other variables
+    return 'mediator';
+  };
+
+  // Create dynamic node templates from file schema
+  const createDynamicNodeTemplates = (schema: string[]): NodeTemplate[] => {
+    return schema.map(columnName => {
+      const type = guessVariableType(columnName);
+      const baseTemplate = nodeTemplates.find(t => t.type === type) || nodeTemplates[0];
+      
+      return {
+        type: columnName, // Use column name as type for uniqueness
+        label: columnName,
+        style: baseTemplate.style,
+        description: `Data column: ${columnName}`
+      };
+    });
+  };
+
+  // Generate recommended DAG structures based on detected variables
+  const generateRecommendedDAGs = (schema: string[]) => {
+    const treatments = schema.filter(col => guessVariableType(col) === 'treatment');
+    const outcomes = schema.filter(col => guessVariableType(col) === 'outcome');
+    const confounders = schema.filter(col => guessVariableType(col) === 'confounder');
+    const mediators = schema.filter(col => guessVariableType(col) === 'mediator');
+    
+    // Take the first outcome as primary target, or first column if no outcome detected
+    const primaryOutcome = outcomes[0] || schema[schema.length - 1];
+    
+    // DAG 1: Simple Direct Effects (No Confounders)
+    const simpleDAG = {
+      name: "Simple Direct Effects",
+      description: "Direct causal relationships without confounders",
+      nodes: [
+        ...treatments.map((col, idx) => ({
+          id: col,
+          label: col,
+          type: 'treatment',
+          position: { x: 100 + (idx * 150), y: 100 }
+        })),
+        {
+          id: primaryOutcome,
+          label: primaryOutcome,
+          type: 'outcome',
+          position: { x: 100 + (treatments.length * 75), y: 250 }
+        }
+      ],
+      edges: treatments.map(treatment => ({
+        id: `${treatment}_to_${primaryOutcome}`,
+        source: treatment,
+        target: primaryOutcome
+      }))
+    };
+
+    // DAG 2: With Confounders (Realistic)
+    const realisticDAG = {
+      name: "With Confounders",
+      description: "Includes confounding variables that affect both treatments and outcomes",
+      nodes: [
+        ...confounders.map((col, idx) => ({
+          id: col,
+          label: col,
+          type: 'confounder',
+          position: { x: 50 + (idx * 120), y: 50 }
+        })),
+        ...treatments.map((col, idx) => ({
+          id: col,
+          label: col,
+          type: 'treatment',
+          position: { x: 100 + (idx * 150), y: 150 }
+        })),
+        {
+          id: primaryOutcome,
+          label: primaryOutcome,
+          type: 'outcome',
+          position: { x: 100 + (treatments.length * 75), y: 300 }
+        }
+      ],
+      edges: [
+        // Treatments to outcome
+        ...treatments.map(treatment => ({
+          id: `${treatment}_to_${primaryOutcome}`,
+          source: treatment,
+          target: primaryOutcome
+        })),
+        // Confounders to treatments
+        ...confounders.flatMap(confounder => 
+          treatments.map(treatment => ({
+            id: `${confounder}_to_${treatment}`,
+            source: confounder,
+            target: treatment
+          }))
+        ),
+        // Confounders to outcome
+        ...confounders.map(confounder => ({
+          id: `${confounder}_to_${primaryOutcome}`,
+          source: confounder,
+          target: primaryOutcome
+        }))
+      ]
+    };
+
+    // DAG 3: Complex with Mediators (Advanced)
+    const complexDAG = {
+      name: "Complex with Mediators",
+      description: "Full causal structure with confounders, mediators, and treatment interactions",
+      nodes: [
+        ...confounders.map((col, idx) => ({
+          id: col,
+          label: col,
+          type: 'confounder',
+          position: { x: 50 + (idx * 100), y: 50 }
+        })),
+        ...treatments.map((col, idx) => ({
+          id: col,
+          label: col,
+          type: 'treatment',
+          position: { x: 80 + (idx * 150), y: 150 }
+        })),
+        ...mediators.slice(0, 2).map((col, idx) => ({ // Limit to 2 mediators for clarity
+          id: col,
+          label: col,
+          type: 'mediator',
+          position: { x: 120 + (idx * 150), y: 225 }
+        })),
+        {
+          id: primaryOutcome,
+          label: primaryOutcome,
+          type: 'outcome',
+          position: { x: 100 + (treatments.length * 75), y: 350 }
+        }
+      ],
+      edges: [
+        // Confounders to treatments
+        ...confounders.flatMap(confounder => 
+          treatments.map(treatment => ({
+            id: `${confounder}_to_${treatment}`,
+            source: confounder,
+            target: treatment
+          }))
+        ),
+        // Treatments to mediators
+        ...treatments.flatMap(treatment => 
+          mediators.slice(0, 2).map((mediator, idx) => ({
+            id: `${treatment}_to_${mediator}`,
+            source: treatment,
+            target: mediator
+          }))
+        ),
+        // Mediators to outcome
+        ...mediators.slice(0, 2).map(mediator => ({
+          id: `${mediator}_to_${primaryOutcome}`,
+          source: mediator,
+          target: primaryOutcome
+        })),
+        // Direct treatment to outcome (partial mediation)
+        ...treatments.map(treatment => ({
+          id: `${treatment}_to_${primaryOutcome}_direct`,
+          source: treatment,
+          target: primaryOutcome
+        })),
+        // Confounders to outcome
+        ...confounders.map(confounder => ({
+          id: `${confounder}_to_${primaryOutcome}`,
+          source: confounder,
+          target: primaryOutcome
+        })),
+        // Treatment interactions (first treatment affects second if multiple)
+        ...(treatments.length > 1 ? [{
+          id: `${treatments[0]}_to_${treatments[1]}`,
+          source: treatments[0],
+          target: treatments[1]
+        }] : [])
+      ]
+    };
+
+    return [simpleDAG, realisticDAG, complexDAG];
+  };
+
+  // Apply recommended DAG to canvas
+  const applyRecommendedDAG = (dagStructure: any) => {
+    // Create nodes with proper styling
+    const styledNodes = dagStructure.nodes.map((node: any) => {
+      const varType = guessVariableType(node.label);
+      const baseTemplate = nodeTemplates.find(t => t.type === varType) || nodeTemplates[0];
+      
+      return {
+        id: node.id,
+        type: 'default',
+        position: node.position,
+        data: { label: node.label },
+        style: baseTemplate.style,
+      };
+    });
+
+    // Create edges with proper styling
+    const styledEdges = dagStructure.edges.map((edge: any) => {
+      const sourceNode = styledNodes.find((n: any) => n.id === edge.source);
+      let edgeStyle: CSSProperties = { stroke: '#222', strokeWidth: 2 };
+      
+      if (sourceNode && isConfounder(sourceNode.data.label)) {
+        edgeStyle = { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' };
+      }
+      
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        style: edgeStyle,
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
+      };
+    });
+
+    setNodes(styledNodes);
+    setEdges(styledEdges);
+    setSelectedNodes([]);
+    setSelectedEdges([]);
+  };
+
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       {/* Sidebar */}
@@ -806,33 +1113,164 @@ function App() {
 
         {/* Node toolbox */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Node Toolbox</h4>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>
+            {fileSchema ? 'Data Columns' : 'Node Toolbox'}
+          </h4>
           <p style={{ fontSize: '11px', color: '#888', margin: '0 0 15px 0' }}>
-            Drag nodes below to canvas
+            {fileSchema ? 'Drag column names to canvas to build your DAG' : 'Drag nodes below to canvas'}
           </p>
-          {nodeTemplates.map((template) => (
-            <div
-              key={template.type}
-              draggable
-              onDragStart={(event) => onDragStart(event, template.type)}
-              style={{
-                ...template.style,
-                margin: '8px 0',
-                cursor: 'grab',
-                userSelect: 'none',
-                textAlign: 'center',
-                transition: 'transform 0.2s',
-              }}
-              onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
-              onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{template.label}</div>
-              <div style={{ fontSize: '10px', opacity: 0.8, marginTop: '2px' }}>
-                {template.description}
+          
+          {isParsingFile ? (
+            <div style={{ 
+              padding: '20px', 
+              textAlign: 'center', 
+              color: '#666',
+              backgroundColor: '#f5f5f5',
+              borderRadius: '8px'
+            }}>
+              <div style={{ fontSize: '16px', marginBottom: '8px' }}>📊</div>
+              <div style={{ fontSize: '12px' }}>Parsing CSV headers...</div>
+            </div>
+          ) : fileSchema ? (
+            // Show CSV columns as draggable nodes
+            <div>
+              <div style={{ fontSize: '10px', color: '#666', marginBottom: '10px' }}>
+                <strong>Detected columns from {uploadedFile?.name}:</strong>
+              </div>
+              {createDynamicNodeTemplates(fileSchema).map((template) => {
+                const varType = guessVariableType(template.label);
+                const typeEmoji = {
+                  'treatment': '🔵',
+                  'outcome': '🔴', 
+                  'confounder': '🟠',
+                  'mediator': '🟢'
+                }[varType] || '⚪';
+                
+                return (
+                  <div
+                    key={template.type}
+                    draggable
+                    onDragStart={(event) => onDragStart(event, template.type)}
+                    style={{
+                      ...template.style,
+                      margin: '6px 0',
+                      cursor: 'grab',
+                      userSelect: 'none',
+                      textAlign: 'center',
+                      transition: 'transform 0.2s',
+                      position: 'relative',
+                      fontSize: '11px'
+                    }}
+                    onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
+                    onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                  >
+                    <div style={{ fontSize: '11px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      <span>{typeEmoji}</span>
+                      <span>{template.label}</span>
+                    </div>
+                    <div style={{ fontSize: '9px', opacity: 0.7, marginTop: '2px' }}>
+                      {varType}
+                    </div>
+                  </div>
+                );
+              })}
+              
+              <div style={{ 
+                fontSize: '9px', 
+                color: '#666', 
+                marginTop: '10px', 
+                padding: '8px', 
+                backgroundColor: '#f9f9f9', 
+                borderRadius: '4px',
+                border: '1px solid #eee'
+              }}>
+                <strong>Legend:</strong><br />
+                🔵 Treatment • 🔴 Outcome • 🟠 Confounder • 🟢 Mediator
+              </div>
+              
+              {/* Recommended DAG structures */}
+              <div style={{ marginTop: '15px' }}>
+                <h5 style={{ margin: '0 0 10px 0', fontSize: '12px', color: '#555' }}>
+                  🎯 Recommended DAG Structures
+                </h5>
+                <p style={{ fontSize: '10px', color: '#666', margin: '0 0 10px 0' }}>
+                  Choose a pre-built structure based on your data:
+                </p>
+                
+                {generateRecommendedDAGs(fileSchema).map((dag, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      margin: '8px 0',
+                      padding: '10px',
+                      border: '1px solid #ddd',
+                      borderRadius: '6px',
+                      backgroundColor: '#fafafa',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onClick={() => applyRecommendedDAG(dag)}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f0f7ff';
+                      e.currentTarget.style.borderColor = '#2196f3';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#fafafa';
+                      e.currentTarget.style.borderColor = '#ddd';
+                    }}
+                  >
+                    <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#333', marginBottom: '4px' }}>
+                      {index + 1}. {dag.name}
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#666', marginBottom: '6px' }}>
+                      {dag.description}
+                    </div>
+                    <div style={{ fontSize: '8px', color: '#888' }}>
+                      {dag.nodes.length} nodes • {dag.edges.length} relationships
+                    </div>
+                  </div>
+                ))}
+                
+                <div style={{ 
+                  fontSize: '9px', 
+                  color: '#666', 
+                  marginTop: '8px',
+                  padding: '6px',
+                  backgroundColor: '#fffbf0',
+                  border: '1px solid #ffd54f',
+                  borderRadius: '4px'
+                }}>
+                  💡 <strong>Tip:</strong> You can modify any structure after applying it by adding/removing nodes and connections.
+                </div>
               </div>
             </div>
-          ))}
+          ) : (
+            // Show default node templates
+            nodeTemplates.map((template) => (
+              <div
+                key={template.type}
+                draggable
+                onDragStart={(event) => onDragStart(event, template.type)}
+                style={{
+                  ...template.style,
+                  margin: '8px 0',
+                  cursor: 'grab',
+                  userSelect: 'none',
+                  textAlign: 'center',
+                  transition: 'transform 0.2s',
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
+                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              >
+                <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{template.label}</div>
+                <div style={{ fontSize: '10px', opacity: 0.8, marginTop: '2px' }}>
+                  {template.description}
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Operation buttons */}
@@ -944,35 +1382,52 @@ function App() {
                   backgroundColor: '#e8f5e9',
                   border: '1px solid #4caf50',
                   borderRadius: '4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '16px' }}>📄</span>
-                    <div>
-                      <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#2e7d32' }}>
-                        {uploadedFile.name}
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#666' }}>
-                        {(uploadedFile.size / 1024).toFixed(1)} KB
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '16px' }}>📄</span>
+                      <div>
+                        <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#2e7d32' }}>
+                          {uploadedFile.name}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#666' }}>
+                          {(uploadedFile.size / 1024).toFixed(1)} KB • {fileSchema?.length || 0} columns
+                        </div>
                       </div>
                     </div>
+                    <button
+                      onClick={removeUploadedFile}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#f44336',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                        padding: '4px'
+                      }}
+                      title="Remove file"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <button
-                    onClick={removeUploadedFile}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#f44336',
-                      cursor: 'pointer',
-                      fontSize: '16px',
-                      padding: '4px'
-                    }}
-                    title="Remove file"
-                  >
-                    ×
-                  </button>
+                  
+                  {/* Variable type breakdown */}
+                  {fileSchema && (
+                    <div style={{ 
+                      fontSize: '10px', 
+                      color: '#2e7d32',
+                      backgroundColor: '#f1f8e9',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      border: '1px solid #c8e6c9'
+                    }}>
+                      <strong>Variable Analysis:</strong><br />
+                      🔵 {fileSchema.filter(col => guessVariableType(col) === 'treatment').length} Treatment(s) • 
+                      🔴 {fileSchema.filter(col => guessVariableType(col) === 'outcome').length} Outcome(s) • 
+                      🟠 {fileSchema.filter(col => guessVariableType(col) === 'confounder').length} Confounder(s) • 
+                      🟢 {fileSchema.filter(col => guessVariableType(col) === 'mediator').length} Other(s)
+                    </div>
+                  )}
                 </div>
               )}
               
@@ -981,6 +1436,8 @@ function App() {
                 <br />• Date column (e.g., 'date_week', 'date')
                 <br />• Target variable (e.g., 'y', 'sales', 'revenue')
                 <br />• Marketing channels (e.g., 'x1', 'x2', 'social_media', 'search')
+                <br /><br />
+                <strong>💡 Tip:</strong> After uploading, the Node Toolbox will show your actual column names for easy DAG building!
               </div>
             </div>
           )}
