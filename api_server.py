@@ -4,7 +4,7 @@ FastAPI backend service for Causal DAG Editor
 Connects React frontend with Python Causal MMM model training
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -14,6 +14,9 @@ import traceback
 import logging
 import sys
 import os
+import pandas as pd
+import tempfile
+import numpy as np
 
 # Add current directory to Python path for importing causal_mmm_tutorial
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -82,6 +85,11 @@ class TrainingRequest(BaseModel):
     dag_dot_string: str
     dag_type: str
 
+class TrainingWithFileRequest(BaseModel):
+    dag_structure: str  # JSON string of DAG structure
+    dag_dot_string: str
+    dag_type: str
+
 class TrainingResponse(BaseModel):
     status: str
     message: str
@@ -96,12 +104,174 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
         super().__init__()
         self.custom_dag = None
         self.custom_dag_dot = None
+        self.custom_data_file = None
         
     def set_custom_dag(self, dag_structure: DAGStructure, dag_dot_string: str):
         """Set custom DAG structure"""
         self.custom_dag = dag_structure
         self.custom_dag_dot = dag_dot_string
         
+    def load_custom_data(self, file_path: str):
+        """Load custom data from uploaded CSV file"""
+        try:
+            print(f"🔍 Loading custom data from: {file_path}")
+            self.df = pd.read_csv(file_path)
+            
+            # Try to detect date column
+            date_columns = [col for col in self.df.columns if 'date' in col.lower()]
+            if date_columns:
+                date_col = date_columns[0]
+                self.df[date_col] = pd.to_datetime(self.df[date_col])
+                self.date_range = self.df[date_col]
+            else:
+                # Create a default date range if no date column found
+                self.date_range = pd.date_range(start='2022-01-01', periods=len(self.df), freq='D')
+                self.df['date_week'] = self.date_range
+            
+            # Prepare data for modeling
+            self._prepare_custom_model_data()
+            
+            print(f"✅ Custom data loaded successfully!")
+            print(f"   Data shape: {self.df.shape}")
+            print(f"   Columns: {list(self.df.columns)}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to load custom data: {e}")
+            print(f"Detailed error: {traceback.format_exc()}")
+            return False
+    
+    def _prepare_custom_model_data(self):
+        """Prepare custom data for modeling"""
+        try:
+            # Detect target variable (look for common names)
+            target_candidates = ['y', 'target', 'sales', 'revenue', 'conversion']
+            target_col = None
+            for candidate in target_candidates:
+                if candidate in self.df.columns:
+                    target_col = candidate
+                    break
+            
+            if target_col is None:
+                # Use the last numeric column as target
+                numeric_cols = self.df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    target_col = numeric_cols[-1]
+                    print(f"⚠️ No standard target column found, using '{target_col}' as target")
+            
+            if target_col is None:
+                raise ValueError("No numeric target variable found in the data")
+            
+            # Rename target column to 'y' for consistency
+            if target_col != 'y':
+                self.df['y'] = self.df[target_col]
+            
+            # Detect marketing channels (x1, x2)
+            channel_candidates = {
+                'x1': ['x1', 'social', 'facebook', 'social_media', 'channel1'],
+                'x2': ['x2', 'search', 'google', 'search_engine', 'channel2']
+            }
+            
+            for channel, keywords in channel_candidates.items():
+                if channel not in self.df.columns:
+                    # Try to find a matching column
+                    for col in self.df.columns:
+                        col_lower = col.lower()
+                        if any(keyword in col_lower for keyword in keywords):
+                            self.df[channel] = self.df[col]
+                            print(f"📍 Mapped '{col}' to '{channel}'")
+                            break
+                    else:
+                        # Create a default channel with small random values
+                        self.df[channel] = np.random.normal(1, 0.1, len(self.df))
+                        print(f"⚠️ Created default values for missing channel '{channel}'")
+            
+            # Generate holiday signal if not present
+            if 'holiday_signal' not in self.df.columns:
+                self._generate_holiday_signal_for_real_data()
+            
+            # Prepare final data for modeling
+            date_col = 'date_week' if 'date_week' in self.df.columns else 'date'
+            columns_to_keep = [date_col, 'y', 'x1', 'x2']
+            if 'holiday_signal' in self.df.columns:
+                columns_to_keep.append('holiday_signal')
+            
+            # Only keep columns that exist
+            available_columns = [col for col in columns_to_keep if col in self.df.columns]
+            self.data = self.df[available_columns].copy()
+            
+            # Ensure date column is named 'date'
+            if date_col != 'date':
+                self.data.rename(columns={date_col: 'date'}, inplace=True)
+            
+            print(f"✅ Custom data prepared for modeling")
+            print(f"   Final data shape: {self.data.shape}")
+            print(f"   Final columns: {list(self.data.columns)}")
+            
+        except Exception as e:
+            print(f"❌ Failed to prepare custom data: {e}")
+            raise
+    
+    def _generate_holiday_signal_for_real_data(self):
+        """为真实数据生成假期信号"""
+        try:
+            # 假期定义
+            holiday_dates = ["24-12"]  # 圣诞节 (MM-DD格式)
+            std_devs = [25]  # 假期影响的标准差（天数）
+            holidays_coefficients = [2]  # 假期影响系数
+            
+            # 初始化信号数组
+            holiday_signal = np.zeros(len(self.date_range))
+            holiday_contributions = np.zeros(len(self.date_range))
+            
+            print(f"正在为 {len(holiday_dates)} 个假期生成信号...")
+            
+            # 为每个假期生成信号
+            for holiday, std_dev, holiday_coef in zip(holiday_dates, std_devs, holidays_coefficients):
+                # 查找假期在日期范围内的所有出现
+                if hasattr(self.date_range, 'dt'):
+                    holiday_occurrences = self.date_range[self.date_range.dt.strftime("%d-%m") == holiday]
+                else:
+                    # If date_range is not pandas datetime, create a simple signal
+                    holiday_occurrences = []
+                
+                print(f"假期 {holiday} 在数据范围内出现 {len(holiday_occurrences)} 次")
+                
+                for occurrence in holiday_occurrences:
+                    # 计算每个日期与假期的时间差
+                    time_diff = (self.date_range - occurrence).days
+                    
+                    # 使用高斯函数生成假期信号
+                    _holiday_signal = np.exp(-0.5 * (time_diff / std_dev) ** 2)
+                    
+                    # 累加假期信号
+                    holiday_signal += _holiday_signal
+                    holiday_contributions += _holiday_signal * holiday_coef
+            
+            # 如果没有检测到假期，创建简单的周期性信号
+            if np.sum(holiday_signal) == 0:
+                print("⚠️ 未检测到假期，创建周期性信号作为替代")
+                # 创建简单的周期性信号（模拟季节性）
+                t = np.arange(len(self.date_range))
+                holiday_signal = 0.5 * (1 + np.sin(2 * np.pi * t / 365.25)) + np.random.normal(0, 0.1, len(t))
+                holiday_contributions = holiday_signal * 0.5
+            
+            # 将生成的信号添加到数据框
+            self.df["holiday_signal"] = holiday_signal
+            self.df["holiday_contributions"] = holiday_contributions
+            
+            print(f"✅ 假期信号生成完成")
+            print(f"   holiday_signal 范围: [{holiday_signal.min():.4f}, {holiday_signal.max():.4f}]")
+            print(f"   holiday_contributions 范围: [{holiday_contributions.min():.4f}, {holiday_contributions.max():.4f}]")
+            
+        except Exception as e:
+            print(f"❌ 假期信号生成失败: {e}")
+            # 如果生成失败，创建零值信号
+            self.df["holiday_signal"] = np.zeros(len(self.df))
+            self.df["holiday_contributions"] = np.zeros(len(self.df))
+            print("⚠️ 使用零值假期信号作为回退方案")
+
     def create_dynamic_dag_string(self, dag_structure: DAGStructure) -> str:
         """Create DOT string based on DAG structure with proper variable mapping"""
         if not dag_structure.edges:
@@ -190,7 +360,7 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
         return {
             'treatment_nodes': treatment_nodes,
             'outcome_nodes': outcome_nodes,
-            'control_nodes': control_nodes,
+            'control_variables': control_nodes,
             'channel_columns': [node for node in treatment_nodes if any(x in node.lower() for x in ['x1', 'x2'])],
             'outcome_node': outcome_nodes[0] if outcome_nodes else 'y'
         }
@@ -221,7 +391,7 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
                     'edges_count': len(dag_structure.edges),
                     'treatment_variables': model_mapping['treatment_nodes'],
                     'outcome_variables': model_mapping['outcome_nodes'],
-                    'control_variables': model_mapping['control_nodes'],
+                    'control_variables': model_mapping['control_variables'],
                     'mode': 'simulation'
                 }
                 
@@ -358,7 +528,7 @@ class EnhancedCausalMMMTutorial(CausalMMMTutorial):
                 'edges_count': len(dag_structure.edges),
                 'treatment_variables': model_mapping['treatment_nodes'],
                 'outcome_variables': model_mapping['outcome_nodes'],
-                'control_variables': model_mapping['control_nodes']
+                'control_variables': model_mapping['control_variables']
             }
             
             # If there are evaluation results, add them to model summary
@@ -504,6 +674,87 @@ async def train_model(request: TrainingRequest):
         raise
     except Exception as e:
         logger.error(f"Error occurred while training model: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.post("/train-model-with-file", response_model=TrainingResponse)
+async def train_model_with_file(
+    file: UploadFile = File(...),
+    dag_structure: str = Form(...),
+    dag_dot_string: str = Form(...),
+    dag_type: str = Form(...)
+):
+    """Endpoint for training causal models with custom data file upload"""
+    
+    try:
+        logger.info(f"Received training request with file upload, DAG type: {dag_type}")
+        logger.info(f"Uploaded file: {file.filename}")
+        
+        # Parse DAG structure from JSON string
+        try:
+            dag_data = json.loads(dag_structure)
+            dag_structure_obj = DAGStructure(**dag_data)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid DAG structure JSON: {str(e)}"
+            )
+        
+        logger.info(f"Node count: {len(dag_structure_obj.nodes)}")
+        logger.info(f"Edge count: {len(dag_structure_obj.edges)}")
+        
+        # Validate input
+        if len(dag_structure_obj.nodes) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="DAG structure cannot be empty, please add at least one node"
+            )
+        
+        # Validate file type
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(
+                status_code=400,
+                detail="Only CSV files are supported for data upload"
+            )
+        
+        # Save uploaded file temporarily
+        temp_file_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                content = await file.read()
+                temp_file.write(content)
+            
+            logger.info(f"File saved temporarily to: {temp_file_path}")
+            
+            # Create enhanced tutorial instance
+            tutorial = EnhancedCausalMMMTutorial()
+            
+            # Load custom data
+            if not tutorial.load_custom_data(temp_file_path):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Failed to load custom data file. Please check file format and content."
+                )
+            
+            # Run model training with custom data
+            result = tutorial.run_custom_model(dag_structure_obj, dag_type)
+            
+            return TrainingResponse(**result)
+            
+        finally:
+            # Clean up temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error occurred while training model with file: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=500,

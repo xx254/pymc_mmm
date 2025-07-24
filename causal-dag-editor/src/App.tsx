@@ -482,6 +482,9 @@ function App() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingResult, setTrainingResult] = useState<TrainingResult | null>(null);
   const [showDAGExport, setShowDAGExport] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [useCustomData, setUseCustomData] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const onConnect = useCallback(
@@ -574,17 +577,34 @@ function App() {
       const dagExport = exportDAG();
       const dotString = generateDOTString();
 
-      const response = await fetch('http://localhost:8000/train-model', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          dag_structure: dagExport,
-          dag_dot_string: dotString,
-          dag_type: dagType
-        }),
-      });
+      let response;
+      
+      if (useCustomData && uploadedFile) {
+        // Train with uploaded file
+        const formData = new FormData();
+        formData.append('file', uploadedFile);
+        formData.append('dag_structure', JSON.stringify(dagExport));
+        formData.append('dag_dot_string', dotString);
+        formData.append('dag_type', dagType);
+
+        response = await fetch('http://localhost:8000/train-model-with-file', {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        // Train with default data (data_mmm.csv)
+        response = await fetch('http://localhost:8000/train-model', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            dag_structure: dagExport,
+            dag_dot_string: dotString,
+            dag_type: dagType
+          }),
+        });
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -617,6 +637,55 @@ function App() {
     } finally {
       setIsTraining(false);
     }
+  };
+
+  // File upload handlers
+  const handleFileUpload = (file: File) => {
+    if (file.type !== 'text/csv' && !file.name.endsWith('.csv')) {
+      alert('Please upload a CSV file only.');
+      return;
+    }
+    
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      alert('File size should be less than 10MB.');
+      return;
+    }
+    
+    setUploadedFile(file);
+    setUseCustomData(true);
+    console.log('File uploaded:', file.name);
+  };
+
+  const handleFileDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileUpload(files[0]);
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFileUpload(files[0]);
+    }
+  };
+
+  const removeUploadedFile = () => {
+    setUploadedFile(null);
+    setUseCustomData(false);
   };
 
   // Drag and drop to add nodes
@@ -804,23 +873,141 @@ function App() {
 
         {/* DAG export and model training */}
         <div style={{ marginBottom: '25px' }}>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Data Source</h4>
+          
+          {/* Data source selection */}
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '12px' }}>
+              <input
+                type="radio"
+                name="dataSource"
+                checked={!useCustomData}
+                onChange={() => {
+                  setUseCustomData(false);
+                  setUploadedFile(null);
+                }}
+              />
+              Use default dataset (data_mmm.csv)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+              <input
+                type="radio"
+                name="dataSource"
+                checked={useCustomData}
+                onChange={() => setUseCustomData(true)}
+              />
+              Upload custom CSV file
+            </label>
+          </div>
+
+          {/* File upload area */}
+          {useCustomData && (
+            <div style={{ marginBottom: '15px' }}>
+              {!uploadedFile ? (
+                <div>
+                  <div
+                    onDragOver={handleFileDragOver}
+                    onDragLeave={handleFileDragLeave}
+                    onDrop={handleFileDrop}
+                    style={{
+                      border: `2px dashed ${isDragOver ? '#2196f3' : '#ddd'}`,
+                      borderRadius: '8px',
+                      padding: '20px',
+                      textAlign: 'center',
+                      backgroundColor: isDragOver ? '#f3f9ff' : '#fafafa',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      marginBottom: '10px'
+                    }}
+                    onClick={() => document.getElementById('file-input')?.click()}
+                  >
+                    <div style={{ fontSize: '24px', marginBottom: '8px' }}>📁</div>
+                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>
+                      Drag & drop your CSV file here, or click to browse
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#999' }}>
+                      Max file size: 10MB
+                    </div>
+                  </div>
+                  
+                  <input
+                    id="file-input"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileInputChange}
+                    style={{ display: 'none' }}
+                  />
+                </div>
+              ) : (
+                <div style={{
+                  padding: '12px',
+                  backgroundColor: '#e8f5e9',
+                  border: '1px solid #4caf50',
+                  borderRadius: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '16px' }}>📄</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#2e7d32' }}>
+                        {uploadedFile.name}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#666' }}>
+                        {(uploadedFile.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={removeUploadedFile}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#f44336',
+                      cursor: 'pointer',
+                      fontSize: '16px',
+                      padding: '4px'
+                    }}
+                    title="Remove file"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '8px' }}>
+                <strong>Expected CSV format:</strong>
+                <br />• Date column (e.g., 'date_week', 'date')
+                <br />• Target variable (e.g., 'y', 'sales', 'revenue')
+                <br />• Marketing channels (e.g., 'x1', 'x2', 'social_media', 'search')
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Model training */}
+        <div style={{ marginBottom: '25px' }}>
           <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Model Training</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={trainModel}
-              disabled={isTraining || nodes.length === 0}
+              disabled={isTraining || nodes.length === 0 || (useCustomData && !uploadedFile)}
               style={{
                 padding: '10px 12px',
-                backgroundColor: isTraining ? '#9e9e9e' : '#2196f3',
+                backgroundColor: isTraining || (useCustomData && !uploadedFile) ? '#9e9e9e' : '#2196f3',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
-                cursor: isTraining || nodes.length === 0 ? 'not-allowed' : 'pointer',
+                cursor: isTraining || nodes.length === 0 || (useCustomData && !uploadedFile) ? 'not-allowed' : 'pointer',
                 fontSize: '12px',
                 fontWeight: 'bold'
               }}
             >
-              {isTraining ? 'Training...' : '🚀 Train Causal Model'}
+              {isTraining ? 'Training...' : 
+               useCustomData && uploadedFile ? `🚀 Train with ${uploadedFile.name}` :
+               useCustomData ? '🚀 Train Model (Upload file first)' : 
+               '🚀 Train with Default Data'}
             </button>
           </div>
 
