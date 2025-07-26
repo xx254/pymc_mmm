@@ -31,8 +31,21 @@ def diagnose_dag_constraints():
     print(f"\n📈 各列方差检查:")
     for col in tutorial.data.columns:
         if col != 'y':
-            variance = tutorial.data[col].var()
-            print(f"   {col}: {variance:.8f} (是否>1e-10: {variance > 1e-10})")
+            try:
+                # 检查是否为日期时间类型
+                if tutorial.data[col].dtype == 'datetime64[ns]':
+                    print(f"   {col}: [日期列，跳过方差检查]")
+                    continue
+                
+                # 检查是否为数值类型
+                if not pd.api.types.is_numeric_dtype(tutorial.data[col]):
+                    print(f"   {col}: [非数值类型: {tutorial.data[col].dtype}，跳过]")
+                    continue
+                    
+                variance = tutorial.data[col].var()
+                print(f"   {col}: {variance:.8f} (是否>1e-10: {variance > 1e-10})")
+            except Exception as e:
+                print(f"   {col}: [计算方差时出错: {e}]")
     
     # 测试三种不同的DAG
     test_cases = [

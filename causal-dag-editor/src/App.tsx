@@ -472,8 +472,82 @@ const isConfounder = (label: string) => {
   );
 };
 
+// Global ResizeObserver error suppression - must be at the top
+const suppressResizeObserverErrors = () => {
+  // Suppress console errors
+  const originalConsoleError = console.error;
+  console.error = (...args: any[]) => {
+    if (args[0] && args[0].toString().includes('ResizeObserver loop')) {
+      return; // Suppress ResizeObserver errors
+    }
+    originalConsoleError.apply(console, args);
+  };
+
+  // Suppress window errors
+  const originalWindowError = window.onerror;
+  window.onerror = (message, source, lineno, colno, error) => {
+    if (typeof message === 'string' && message.includes('ResizeObserver loop')) {
+      return true; // Suppress the error
+    }
+    return originalWindowError ? originalWindowError(message, source, lineno, colno, error) : false;
+  };
+};
+
+// Call immediately when module loads
+suppressResizeObserverErrors();
+
 function App() {
-  const [dagType, setDagType] = useState<'business' | 'simple' | 'custom'>('business');
+  // Comprehensive ResizeObserver error suppression
+  React.useLayoutEffect(() => {
+    // Multiple approaches to catch ResizeObserver errors
+    const originalError = console.error;
+    console.error = (...args) => {
+      if (args[0]?.toString().includes('ResizeObserver loop')) {
+        return; // Suppress ResizeObserver errors
+      }
+      originalError.apply(console, args);
+    };
+
+    // Handle window errors
+    const handleError = (event: ErrorEvent) => {
+      if (event.error?.message?.includes('ResizeObserver loop') || 
+          event.message?.includes('ResizeObserver loop')) {
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      }
+    };
+
+    // Handle unhandled promise rejections
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      if (event.reason?.message?.includes('ResizeObserver loop')) {
+        event.preventDefault();
+        return false;
+      }
+    };
+
+    // Set up error handlers
+    window.addEventListener('error', handleError, true);
+    window.addEventListener('unhandledrejection', handleRejection, true);
+    
+    // Override the global error handler
+    const originalOnError = window.onerror;
+    window.onerror = (message, source, lineno, colno, error) => {
+      if (typeof message === 'string' && message.includes('ResizeObserver loop')) {
+        return true; // Suppress the error
+      }
+      return originalOnError ? originalOnError(message, source, lineno, colno, error) : false;
+    };
+
+    return () => {
+      console.error = originalError;
+      window.removeEventListener('error', handleError, true);
+      window.removeEventListener('unhandledrejection', handleRejection, true);
+      window.onerror = originalOnError;
+    };
+  }, []);
+
+  const [dagType, setDagType] = useState<'simple' | 'realistic' | 'complex'>('realistic');
   const [nodes, setNodes, onNodesChange] = useNodesState(businessScenarioNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(businessScenarioEdges);
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
@@ -488,6 +562,73 @@ function App() {
   const [fileSchema, setFileSchema] = useState<string[] | null>(null);
   const [isParsingFile, setIsParsingFile] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+
+  // Resizable panels state
+  const [leftPanelWidth, setLeftPanelWidth] = useState(50); // percentage
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef({ isActive: false, lastUpdate: 0, timeoutId: null as NodeJS.Timeout | null });
+
+  // Handle splitter drag
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragRef.current.isActive = true;
+    e.preventDefault();
+  };
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!dragRef.current.isActive) return;
+    
+    // Clear any pending timeout
+    if (dragRef.current.timeoutId) {
+      clearTimeout(dragRef.current.timeoutId);
+    }
+    
+    const containerWidth = window.innerWidth;
+    const newLeftWidth = (e.clientX / containerWidth) * 100;
+    
+    // Constrain between 20% and 80%
+    const constrainedWidth = Math.min(Math.max(newLeftWidth, 20), 80);
+    
+    // Debounce the state update
+    dragRef.current.timeoutId = setTimeout(() => {
+      setLeftPanelWidth(constrainedWidth);
+    }, 10); // 10ms debounce
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    dragRef.current.isActive = false;
+    
+    // Clear any pending timeout
+    if (dragRef.current.timeoutId) {
+      clearTimeout(dragRef.current.timeoutId);
+      dragRef.current.timeoutId = null;
+    }
+    
+    // Trigger ReactFlow resize after drag ends
+    setTimeout(() => {
+      if (reactFlowInstance) {
+        reactFlowInstance.fitView();
+      }
+    }, 200); // Increased delay to let everything settle
+  }, [reactFlowInstance]);
+
+  // Add global mouse event listeners
+  React.useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const onConnect = useCallback(
     (params: Edge | Connection) => {
@@ -517,15 +658,15 @@ function App() {
 
   const onInit = (rfi: ReactFlowInstance) => setReactFlowInstance(rfi);
 
-  const switchDAG = (type: 'business' | 'simple' | 'custom') => {
+  const switchDAG = (type: 'simple' | 'realistic' | 'complex') => {
     setDagType(type);
-    if (type === 'business') {
+    if (type === 'realistic') {
       setNodes(businessScenarioNodes);
       setEdges(businessScenarioEdges);
     } else if (type === 'simple') {
       setNodes(simpleDagNodes);
       setEdges(simpleDagEdges);
-    } else if (type === 'custom') {
+    } else if (type === 'complex') {
       setNodes([]);
       setEdges([]);
     }
@@ -678,6 +819,12 @@ function App() {
       setUploadedFile(file);
       setUseCustomData(true);
       
+      // Generate initial column interpretation
+      const interpretation = analyzeColumnMeanings(headers);
+      setColumnInterpretation(interpretation);
+      setIsInterpretationConfirmed(false);
+      setCausalAnalysis(null);
+      
       // Ask user if they want to clear the current DAG to start fresh
       if (nodes.length > 0) {
         const shouldClear = window.confirm(
@@ -686,16 +833,11 @@ function App() {
         if (shouldClear) {
           setNodes([]);
           setEdges([]);
-          setSelectedNodes([]);
-          setSelectedEdges([]);
         }
       }
-      
-      console.log('File uploaded:', file.name);
-      console.log('CSV headers:', headers);
     } catch (error) {
-      console.error('Error parsing CSV headers:', error);
-      alert('Error reading CSV file. Please check the file format.');
+      console.error('Error parsing CSV:', error);
+      alert('Failed to parse CSV file. Please check the file format.');
     } finally {
       setIsParsingFile(false);
     }
@@ -732,6 +874,9 @@ function App() {
     setUploadedFile(null);
     setUseCustomData(false);
     setFileSchema(null);
+    setColumnInterpretation(null);
+    setIsInterpretationConfirmed(false);
+    setCausalAnalysis(null);
   };
 
   // Drag and drop to add nodes
@@ -845,7 +990,7 @@ function App() {
   };
 
   // Helper function to guess variable type based on column name
-  const guessVariableType = (columnName: string): 'treatment' | 'outcome' | 'confounder' | 'mediator' => {
+  const guessVariableType = (columnName: string): 'treatment' | 'outcome' | 'confounder' | 'unknown' => {
     const name = columnName.toLowerCase();
     
     // Treatment variables (marketing channels)
@@ -868,192 +1013,167 @@ function App() {
       return 'outcome';
     }
     
-    // Confounder variables
+    // Confounder variables (including new ones)
     if (name.includes('holiday') || name.includes('season') || 
         name.includes('competitor') || name.includes('event') || 
         name.includes('weather') || name.includes('trend') ||
         name.includes('macro') || name.includes('gdp') ||
-        name.includes('index')) {
+        name.includes('index') || name.includes('economic') ||
+        name.includes('inflation') || name.includes('activity') ||
+        name === 'seasonality' || name === 'competitor_activity' ||
+        name === 'economic_environment') {
       return 'confounder';
     }
     
-    // Default to mediator for other variables
-    return 'mediator';
+    // Default to unknown for other variables
+    return 'unknown';
   };
 
   // Create dynamic node templates from file schema
   const createDynamicNodeTemplates = (schema: string[]): NodeTemplate[] => {
     return schema.map(columnName => {
       const type = guessVariableType(columnName);
-      const baseTemplate = nodeTemplates.find(t => t.type === type) || nodeTemplates[0];
       
       return {
         type: columnName, // Use column name as type for uniqueness
         label: columnName,
-        style: baseTemplate.style,
-        description: `Data column: ${columnName}`
+        style: {
+          backgroundColor: '#1976d2', // Strong blue for all user data
+          color: 'white',
+          padding: '10px 15px',
+          borderRadius: '8px',
+          border: '2px solid #0d47a1',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          cursor: 'grab',
+          minWidth: '100px',
+          textAlign: 'center' as const
+        },
+        description: `用户数据列: ${columnName} (${type})`
       };
     });
   };
 
   // Generate recommended DAG structures based on detected variables
-  const generateRecommendedDAGs = (schema: string[]) => {
-    const treatments = schema.filter(col => guessVariableType(col) === 'treatment');
-    const outcomes = schema.filter(col => guessVariableType(col) === 'outcome');
-    const confounders = schema.filter(col => guessVariableType(col) === 'confounder');
-    const mediators = schema.filter(col => guessVariableType(col) === 'mediator');
+  const generateRecommendedDAGs = (schema: string[], interpretation?: {[key: string]: {type: string, description: string, confidence: number}}) => {
+    // Filter out time/date columns
+    const nonTimeColumns = schema.filter(col => {
+      const type = interpretation?.[col]?.type || guessVariableType(col);
+      return type !== 'time' && 
+        !col.toLowerCase().includes('date') && 
+        !col.toLowerCase().includes('time') && 
+        !col.toLowerCase().includes('week') && 
+        !col.toLowerCase().includes('month');
+    });
     
-    // Take the first outcome as primary target, or first column if no outcome detected
-    const primaryOutcome = outcomes[0] || schema[schema.length - 1];
+    // Identify variable types using confirmed interpretation or fallback to guess
+    const getVariableType = (col: string) => interpretation?.[col]?.type || guessVariableType(col);
     
-    // DAG 1: Simple Direct Effects (No Confounders)
-    const simpleDAG = {
-      name: "Simple Direct Effects",
-      description: "Direct causal relationships without confounders",
-      nodes: [
-        ...treatments.map((col, idx) => ({
-          id: col,
-          label: col,
-          type: 'treatment',
-          position: { x: 100 + (idx * 150), y: 100 }
-        })),
-        {
-          id: primaryOutcome,
-          label: primaryOutcome,
-          type: 'outcome',
-          position: { x: 100 + (treatments.length * 75), y: 250 }
-        }
-      ],
-      edges: treatments.map(treatment => ({
-        id: `${treatment}_to_${primaryOutcome}`,
-        source: treatment,
-        target: primaryOutcome
-      }))
-    };
+    const treatments = nonTimeColumns.filter(col => getVariableType(col) === 'treatment');
+    const outcomes = nonTimeColumns.filter(col => getVariableType(col) === 'outcome');
+    const confounders = nonTimeColumns.filter(col => getVariableType(col) === 'confounder');
+    const mediators = nonTimeColumns.filter(col => getVariableType(col) === 'mediator');
+    
+    // Add common confounders if not present in data
+    const commonConfounders = ['seasonality', 'competitor_activity', 'economic_environment'];
+    const theoreticalConfounders: string[] = [];
+    
+    // Add missing common confounders for demonstration
+    commonConfounders.forEach(conf => {
+      if (!confounders.some(existing => 
+        existing.toLowerCase().includes(conf.replace('_', '').replace('activity', '').replace('environment', '')))) {
+        theoreticalConfounders.push(conf);
+      }
+    });
+    
+    // Use ALL user columns, not just primary ones
+    const allTreatments = treatments.length > 0 ? treatments : ['x1', 'x2'];
+    const allOutcomes = outcomes.length > 0 ? outcomes : ['y'];
+    const allConfounders = [...confounders, ...theoreticalConfounders.slice(0, 2)]; // Limit theoretical ones
+    // Remove mediators - not needed for now
 
-    // DAG 2: With Confounders (Realistic)
-    const realisticDAG = {
-      name: "With Confounders",
-      description: "Includes confounding variables that affect both treatments and outcomes",
-      nodes: [
-        ...confounders.map((col, idx) => ({
-          id: col,
-          label: col,
-          type: 'confounder',
-          position: { x: 50 + (idx * 120), y: 50 }
-        })),
-        ...treatments.map((col, idx) => ({
-          id: col,
-          label: col,
-          type: 'treatment',
-          position: { x: 100 + (idx * 150), y: 150 }
-        })),
-        {
-          id: primaryOutcome,
-          label: primaryOutcome,
-          type: 'outcome',
-          position: { x: 100 + (treatments.length * 75), y: 300 }
-        }
-      ],
-      edges: [
-        // Treatments to outcome
-        ...treatments.map(treatment => ({
-          id: `${treatment}_to_${primaryOutcome}`,
-          source: treatment,
-          target: primaryOutcome
-        })),
-        // Confounders to treatments
-        ...confounders.flatMap(confounder => 
-          treatments.map(treatment => ({
-            id: `${confounder}_to_${treatment}`,
-            source: confounder,
-            target: treatment
+    return [
+      {
+        name: 'Simple Direct Effects',
+        description: '直接因果关系，包含所有变量',
+        nodes: [
+          // Include ALL treatments
+          ...allTreatments.map((treatment, idx) => ({
+            id: treatment,
+            label: treatment,
+            position: { x: 150, y: 100 + (idx * 80) },
+            isUserData: schema.includes(treatment)
+          })),
+          // Include ALL outcomes
+          ...allOutcomes.map((outcome, idx) => ({
+            id: outcome,
+            label: outcome,
+            position: { x: 400, y: 130 + (idx * 80) },
+            isUserData: schema.includes(outcome)
           }))
-        ),
-        // Confounders to outcome
-        ...confounders.map(confounder => ({
-          id: `${confounder}_to_${primaryOutcome}`,
-          source: confounder,
-          target: primaryOutcome
-        }))
-      ]
-    };
-
-    // DAG 3: Complex with Mediators (Advanced)
-    const complexDAG = {
-      name: "Complex with Mediators",
-      description: "Full causal structure with confounders, mediators, and treatment interactions",
-      nodes: [
-        ...confounders.map((col, idx) => ({
-          id: col,
-          label: col,
-          type: 'confounder',
-          position: { x: 50 + (idx * 100), y: 50 }
-        })),
-        ...treatments.map((col, idx) => ({
-          id: col,
-          label: col,
-          type: 'treatment',
-          position: { x: 80 + (idx * 150), y: 150 }
-        })),
-        ...mediators.slice(0, 2).map((col, idx) => ({ // Limit to 2 mediators for clarity
-          id: col,
-          label: col,
-          type: 'mediator',
-          position: { x: 120 + (idx * 150), y: 225 }
-        })),
-        {
-          id: primaryOutcome,
-          label: primaryOutcome,
-          type: 'outcome',
-          position: { x: 100 + (treatments.length * 75), y: 350 }
-        }
-      ],
-      edges: [
-        // Confounders to treatments
-        ...confounders.flatMap(confounder => 
-          treatments.map(treatment => ({
-            id: `${confounder}_to_${treatment}`,
-            source: confounder,
-            target: treatment
+        ],
+        edges: [
+          // Connect all treatments to all outcomes
+          ...allTreatments.flatMap(treatment =>
+            allOutcomes.map((outcome, idx) => ({
+              id: `${treatment}_to_${outcome}`,
+              source: treatment,
+              target: outcome
+            }))
+          )
+        ]
+      },
+      {
+        name: 'With Confounders',
+        description: '包含所有变量和混淆因子',
+        nodes: [
+          // All treatments
+          ...allTreatments.map((treatment, idx) => ({
+            id: treatment,
+            label: treatment,
+            position: { x: 250, y: 120 + (idx * 80) },
+            isUserData: schema.includes(treatment)
+          })),
+          // All outcomes
+          ...allOutcomes.map((outcome, idx) => ({
+            id: outcome,
+            label: outcome,
+            position: { x: 450, y: 140 + (idx * 80) },
+            isUserData: schema.includes(outcome)
+          })),
+          // All confounders (user + theoretical)
+          ...allConfounders.slice(0, 3).map((confounder, idx) => ({
+            id: confounder,
+            label: confounder,
+            position: { x: 80, y: 80 + (idx * 60) },
+            isUserData: schema.includes(confounder)
           }))
-        ),
-        // Treatments to mediators
-        ...treatments.flatMap(treatment => 
-          mediators.slice(0, 2).map((mediator, idx) => ({
-            id: `${treatment}_to_${mediator}`,
-            source: treatment,
-            target: mediator
-          }))
-        ),
-        // Mediators to outcome
-        ...mediators.slice(0, 2).map(mediator => ({
-          id: `${mediator}_to_${primaryOutcome}`,
-          source: mediator,
-          target: primaryOutcome
-        })),
-        // Direct treatment to outcome (partial mediation)
-        ...treatments.map(treatment => ({
-          id: `${treatment}_to_${primaryOutcome}_direct`,
-          source: treatment,
-          target: primaryOutcome
-        })),
-        // Confounders to outcome
-        ...confounders.map(confounder => ({
-          id: `${confounder}_to_${primaryOutcome}`,
-          source: confounder,
-          target: primaryOutcome
-        })),
-        // Treatment interactions (first treatment affects second if multiple)
-        ...(treatments.length > 1 ? [{
-          id: `${treatments[0]}_to_${treatments[1]}`,
-          source: treatments[0],
-          target: treatments[1]
-        }] : [])
-      ]
-    };
-
-    return [simpleDAG, realisticDAG, complexDAG];
+        ],
+        edges: [
+          // Treatments to outcomes
+          ...allTreatments.flatMap(treatment =>
+            allOutcomes.map(outcome => ({
+              id: `${treatment}_to_${outcome}`,
+              source: treatment,
+              target: outcome
+            }))
+          ),
+          // Confounders to treatments and outcomes
+          ...allConfounders.slice(0, 3).flatMap(confounder => [
+            ...allTreatments.map(treatment => ({
+              id: `${confounder}_to_${treatment}`,
+              source: confounder,
+              target: treatment
+            })),
+            ...allOutcomes.map(outcome => ({
+              id: `${confounder}_to_${outcome}`,
+              source: confounder,
+              target: outcome
+            }))
+          ])
+        ]
+      }
+    ];
   };
 
   // Apply recommended DAG to canvas
@@ -1063,29 +1183,95 @@ function App() {
       const varType = guessVariableType(node.label);
       const baseTemplate = nodeTemplates.find(t => t.type === varType) || nodeTemplates[0];
       
+      // Check if node is in user's actual data
+      const isInUserData = fileSchema ? fileSchema.includes(node.id) : true;
+      
+      // Color scheme: User data = blue, Theoretical = different colors by type
+      let backgroundColor;
+      if (isInUserData) {
+        // All user-provided columns use the same blue color
+        backgroundColor = '#1976d2'; // Strong blue for user data
+      } else {
+        // Theoretical variables use different colors by type
+        const colorMap = {
+          'treatment': '#42a5f5',      // Light blue
+          'outcome': '#ef5350',        // Red
+          'confounder': '#ff9800',     // Orange
+          'seasonality': '#ffb74d',    // Light orange
+          'competitor': '#8d6e63',     // Brown
+          'economic_activity': '#78909c', // Blue grey
+          'unknown': '#9e9e9e'         // Grey
+        };
+        backgroundColor = colorMap[varType] || '#9e9e9e'; // Default grey
+      }
+      
+      // Check if this node is a confounder
+      const nodeType = columnInterpretation && columnInterpretation[node.label] 
+        ? columnInterpretation[node.label].type 
+        : guessVariableType(node.label);
+      const isConfounder = nodeType === 'confounder';
+      
+      // Create different styles for user data vs theoretical variables
+      const nodeStyle = {
+        ...baseTemplate.style,
+        backgroundColor,
+        color: 'white', // White text for better contrast
+        // User data nodes: larger and more prominent
+        // Theoretical nodes: smaller and less prominent
+        padding: isInUserData ? '15px 20px' : '8px 12px',
+        fontSize: isInUserData ? '14px' : '11px',
+        fontWeight: isInUserData ? 'bold' : 'normal',
+        borderWidth: isInUserData ? '3px' : '2px',
+        borderColor: isInUserData ? '#0d47a1' : backgroundColor,
+        borderStyle: isConfounder ? 'dashed' : 'solid', // Dashed border for confounders
+        minWidth: isInUserData ? '120px' : '100px',
+        minHeight: isInUserData ? '50px' : '35px'
+      };
+      
       return {
         id: node.id,
         type: 'default',
         position: node.position,
         data: { label: node.label },
-        style: baseTemplate.style,
+        style: nodeStyle,
       };
     });
 
     // Create edges with proper styling
     const styledEdges = dagStructure.edges.map((edge: any) => {
-      const sourceNode = styledNodes.find((n: any) => n.id === edge.source);
-      let edgeStyle: CSSProperties = { stroke: '#222', strokeWidth: 2 };
+      // Check if BOTH source AND target are in user's data
+      const isSourceInUserData = fileSchema ? fileSchema.includes(edge.source) : true;
+      const isTargetInUserData = fileSchema ? fileSchema.includes(edge.target) : true;
       
-      if (sourceNode && isConfounder(sourceNode.data.label)) {
-        edgeStyle = { stroke: '#222', strokeWidth: 2, strokeDasharray: '5,5' };
-      }
+      // Check if source or target is a confounder
+      const getNodeType = (nodeId: string, nodeLabel?: string) => {
+        const id = nodeLabel || nodeId;
+        if (columnInterpretation && columnInterpretation[id]) {
+          return columnInterpretation[id].type;
+        }
+        return guessVariableType(id);
+      };
+      
+      const isSourceConfounder = getNodeType(edge.source, edge.source) === 'confounder';
+      const isTargetConfounder = getNodeType(edge.target, edge.target) === 'confounder';
+      
+      // Use dashed line ONLY if EITHER source OR target is a confounder
+      // Mediators and other theoretical variables should use solid lines for causal pathways
+      const shouldUseDashedLine = isSourceConfounder || isTargetConfounder;
+      
+      // Make user data connections more prominent
+      const strokeWidth = isSourceInUserData && isTargetInUserData ? 3 : 2;
       
       return {
         id: edge.id,
         source: edge.source,
         target: edge.target,
-        style: edgeStyle,
+        style: {
+          ...edge.style,
+          stroke: selectedEdges.includes(edge.id) ? '#2196f3' : edge.style?.stroke,
+          strokeWidth: selectedEdges.includes(edge.id) ? 4 : strokeWidth,
+          strokeDasharray: shouldUseDashedLine ? '8,4' : 'none'
+        },
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed, color: '#222' },
       };
@@ -1097,215 +1283,448 @@ function App() {
     setSelectedEdges([]);
   };
 
+  // Add new state for column interpretation workflow
+  const [columnInterpretation, setColumnInterpretation] = useState<{[key: string]: {type: string, description: string, confidence: number}} | null>(null);
+  const [isInterpretationConfirmed, setIsInterpretationConfirmed] = useState(false);
+  const [causalAnalysis, setCausalAnalysis] = useState<string | null>(null);
+
+  // Analyze column meanings and generate interpretation
+  const analyzeColumnMeanings = (schema: string[]) => {
+    const interpretation: {[key: string]: {type: string, description: string, confidence: number}} = {};
+    
+    schema.forEach(col => {
+      const colLower = col.toLowerCase();
+      let type = 'unknown';
+      let description = '';
+      let confidence = 0.5; // Default confidence
+      
+      // Date/Time columns
+      if (colLower.includes('date') || colLower.includes('time') || colLower.includes('week') || colLower.includes('month')) {
+        type = 'time';
+        description = '时间变量（通常用于时间序列分析）';
+        confidence = 0.9;
+      }
+      // Outcome variables
+      else if (colLower.includes('sales') || colLower.includes('revenue') || colLower.includes('conversion') || 
+               colLower.includes('purchase') || colLower.includes('profit') || colLower === 'y') {
+        type = 'outcome';
+        description = '结果变量（我们想要预测/解释的目标）';
+        confidence = 0.8;
+      }
+      // Marketing/Treatment variables
+      else if (colLower.includes('ad') || colLower.includes('marketing') || colLower.includes('campaign') ||
+               colLower.includes('social') || colLower.includes('search') || colLower.includes('tv') ||
+               colLower.includes('radio') || colLower.includes('email') || colLower.match(/x\d+/)) {
+        type = 'treatment';
+        description = '营销/干预变量（广告投入、营销活动等）';
+        confidence = 0.8;
+      }
+      // Holiday/Event variables
+      else if (colLower.includes('holiday') || colLower.includes('event') || colLower.includes('promotion')) {
+        type = 'confounder';
+        description = '外部事件/促销变量（可能影响营销效果和结果）';
+        confidence = 0.7;
+      }
+      // Price variables
+      else if (colLower.includes('price') || colLower.includes('cost') || colLower.includes('discount')) {
+        type = 'confounder';
+        description = '定价相关变量（可能同时影响营销策略和销售）';
+        confidence = 0.7;
+      }
+      // Engagement/Mediator variables
+      else if (colLower.includes('click') || colLower.includes('impression') || colLower.includes('engagement') ||
+               colLower.includes('traffic') || colLower.includes('awareness')) {
+        type = 'mediator';
+        description = '中介变量（营销影响的中间过程）';
+        confidence = 0.7;
+      }
+      // Competition variables
+      else if (colLower.includes('competitor') || colLower.includes('market_share')) {
+        type = 'confounder';
+        description = '竞争相关变量（外部市场因素）';
+        confidence = 0.7;
+      }
+      // Economic variables
+      else if (colLower.includes('gdp') || colLower.includes('economic') || colLower.includes('unemployment')) {
+        type = 'confounder';
+        description = '经济环境变量（宏观经济因素）';
+        confidence = 0.8;
+      }
+      else {
+        // Try to guess based on context
+        if (colLower.includes('budget') || colLower.includes('spend') || colLower.includes('investment')) {
+          type = 'treatment';
+          description = '投入/预算变量（可能是营销投入）';
+          confidence = 0.6;
+        } else if (colLower.includes('customer') || colLower.includes('user')) {
+          type = 'outcome';
+          description = '客户相关指标（可能是结果变量）';
+          confidence = 0.5;
+        } else {
+          type = 'unknown';
+          description = '未知类型（请手动分类）';
+          confidence = 0.3;
+        }
+      }
+      
+      interpretation[col] = { type, description, confidence };
+    });
+    
+    return interpretation;
+  };
+
+  // Generate causal analysis based on confirmed interpretation
+  const generateCausalAnalysis = (interpretation: {[key: string]: {type: string, description: string, confidence: number}}) => {
+    const treatments = Object.keys(interpretation).filter(col => interpretation[col].type === 'treatment');
+    const outcomes = Object.keys(interpretation).filter(col => interpretation[col].type === 'outcome');
+    const confounders = Object.keys(interpretation).filter(col => interpretation[col].type === 'confounder');
+    
+    let analysis = "## 🔍 因果推断分析\n\n";
+    
+    // Main causal relationships
+    analysis += "### 主要因果关系:\n";
+    if (treatments.length > 0 && outcomes.length > 0) {
+      treatments.forEach(treatment => {
+        outcomes.forEach(outcome => {
+          analysis += `• **${treatment}** → **${outcome}**: 营销投入对结果的直接因果效应\n`;
+        });
+      });
+    }
+    
+    // Confounding analysis
+    if (confounders.length > 0) {
+      analysis += "\n### ⚠️ 混淆因子分析:\n";
+      confounders.forEach(confounder => {
+        analysis += `• **${confounder}**: 可能同时影响营销投入和结果，需要控制其影响\n`;
+      });
+      analysis += "\n**建议**: 在DAG中包含这些混淆因子，以获得准确的因果效应估计。\n";
+    }
+    
+    // DAG recommendations
+    analysis += "\n### 📊 DAG结构建议:\n";
+    
+    if (confounders.length === 0) {
+      analysis += "1. **简单直接模型**: 由于没有明显的混淆因子，可以使用简单的直接因果关系\n";
+      analysis += "2. **风险**: 可能存在未观察到的混淆，建议考虑理论上的混淆因子\n";
+    } else {
+      analysis += "1. **控制混淆模型**: 重点控制混淆因子，获得无偏的因果效应估计\n";
+      analysis += "2. **推荐**: 使用包含混淆因子的DAG结构\n";
+    }
+    
+    analysis += "\n### 🎯 最佳实践建议:\n";
+    analysis += "• 从简单模型开始，逐步增加复杂性\n";
+    analysis += "• 基于领域知识验证因果假设\n";
+    analysis += "• 比较不同DAG结构的模型性能\n";
+    analysis += "• 注意因果识别的假设条件\n";
+    
+    return analysis;
+  };
+
+  // Update column interpretation
+  const updateColumnInterpretation = (column: string, newType: string) => {
+    if (columnInterpretation) {
+      setColumnInterpretation({
+        ...columnInterpretation,
+        [column]: {
+          ...columnInterpretation[column],
+          type: newType
+        }
+      });
+    }
+  };
+
+  // Confirm interpretation and generate analysis
+  const confirmInterpretation = () => {
+    if (columnInterpretation) {
+      setIsInterpretationConfirmed(true);
+      const analysis = generateCausalAnalysis(columnInterpretation);
+      setCausalAnalysis(analysis);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       {/* Sidebar */}
       <div style={{
-        width: '300px',
+        width: `${leftPanelWidth}%`, // Simple dynamic width
         background: 'white',
         borderRight: '1px solid #ddd',
         padding: '20px',
-        overflow: 'auto',
-        boxShadow: '2px 0 4px rgba(0,0,0,0.1)'
+        overflowY: 'auto',
+        fontSize: '13px'
       }}>
         <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>Causal DAG Editor</h3>
         
 
-        {/* Node toolbox */}
-        <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>
-            {fileSchema ? 'Data Columns' : 'Node Toolbox'}
-          </h4>
-          <p style={{ fontSize: '11px', color: '#888', margin: '0 0 15px 0' }}>
-            {fileSchema ? 'Drag column names to canvas to build your DAG' : 'Drag nodes below to canvas'}
-          </p>
-          
-          {isParsingFile ? (
-            <div style={{ 
-              padding: '20px', 
-              textAlign: 'center', 
-              color: '#666',
-              backgroundColor: '#f5f5f5',
-              borderRadius: '8px'
-            }}>
-              <div style={{ fontSize: '16px', marginBottom: '8px' }}>📊</div>
-              <div style={{ fontSize: '12px' }}>Parsing CSV headers...</div>
-            </div>
-          ) : fileSchema ? (
-            // Show CSV columns as draggable nodes
-            <div>
-              <div style={{ fontSize: '10px', color: '#666', marginBottom: '10px' }}>
-                <strong>Detected columns from {uploadedFile?.name}:</strong>
-              </div>
-              {createDynamicNodeTemplates(fileSchema).map((template) => {
-                const varType = guessVariableType(template.label);
-                const typeEmoji = {
-                  'treatment': '🔵',
-                  'outcome': '🔴', 
-                  'confounder': '🟠',
-                  'mediator': '🟢'
-                }[varType] || '⚪';
-                
-                return (
-                  <div
-                    key={template.type}
-                    draggable
-                    onDragStart={(event) => onDragStart(event, template.type)}
-                    style={{
-                      ...template.style,
-                      margin: '6px 0',
-                      cursor: 'grab',
-                      userSelect: 'none',
-                      textAlign: 'center',
-                      transition: 'transform 0.2s',
-                      position: 'relative',
-                      fontSize: '11px'
-                    }}
-                    onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
-                    onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                  >
-                    <div style={{ fontSize: '11px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                      <span>{typeEmoji}</span>
-                      <span>{template.label}</span>
-                    </div>
-                    <div style={{ fontSize: '9px', opacity: 0.7, marginTop: '2px' }}>
-                      {varType}
-                    </div>
-                  </div>
-                );
-              })}
-              
-              <div style={{ 
-                fontSize: '9px', 
-                color: '#666', 
-                marginTop: '10px', 
-                padding: '8px', 
-                backgroundColor: '#f9f9f9', 
-                borderRadius: '4px',
-                border: '1px solid #eee'
-              }}>
-                <strong>Legend:</strong><br />
-                🔵 Treatment • 🔴 Outcome • 🟠 Confounder • 🟢 Mediator
-              </div>
-              
-              {/* Recommended DAG structures */}
-              <div style={{ marginTop: '15px' }}>
-                <h5 style={{ margin: '0 0 10px 0', fontSize: '12px', color: '#555' }}>
-                  🎯 Recommended DAG Structures
-                </h5>
-                <p style={{ fontSize: '10px', color: '#666', margin: '0 0 10px 0' }}>
-                  Choose a pre-built structure based on your data:
-                </p>
-                
-                {generateRecommendedDAGs(fileSchema).map((dag, index) => (
-                  <div
-                    key={index}
-                    style={{
-                      margin: '8px 0',
-                      padding: '10px',
-                      border: '1px solid #ddd',
-                      borderRadius: '6px',
-                      backgroundColor: '#fafafa',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onClick={() => applyRecommendedDAG(dag)}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = '#f0f7ff';
-                      e.currentTarget.style.borderColor = '#2196f3';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = '#fafafa';
-                      e.currentTarget.style.borderColor = '#ddd';
-                    }}
-                  >
+
+        {/* Recommended DAG structures - show only after causal analysis is confirmed */}
+        {fileSchema && isInterpretationConfirmed && (
+          <div style={{ marginBottom: '25px' }}>
+            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>
+              🎯 基于因果分析的DAG推荐
+            </h4>
+            <p style={{ fontSize: '10px', color: '#666', margin: '0 0 15px 0' }}>
+              根据您确认的变量类型和因果分析，选择最适合的DAG结构：
+            </p>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '15px' }}>
+              {generateRecommendedDAGs(fileSchema, columnInterpretation || undefined).map((dag, index) => (
+                <div
+                  key={index}
+                  style={{
+                    border: '1px solid #ddd',
+                    borderRadius: '8px',
+                    backgroundColor: '#fafafa',
+                    overflow: 'hidden',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {/* Header */}
+                  <div style={{
+                    padding: '12px',
+                    backgroundColor: '#f5f5f5',
+                    borderBottom: '1px solid #e0e0e0'
+                  }}>
                     <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#333', marginBottom: '4px' }}>
                       {index + 1}. {dag.name}
                     </div>
-                    <div style={{ fontSize: '9px', color: '#666', marginBottom: '6px' }}>
+                    <div style={{ fontSize: '9px', color: '#666' }}>
                       {dag.description}
                     </div>
-                    <div style={{ fontSize: '8px', color: '#888' }}>
-                      {dag.nodes.length} nodes • {dag.edges.length} relationships
+                    <div style={{ fontSize: '8px', color: '#888', marginTop: '4px' }}>
+                      {dag.nodes.length} 节点 • {dag.edges.length} 关系
                     </div>
                   </div>
-                ))}
-                
-                <div style={{ 
-                  fontSize: '9px', 
-                  color: '#666', 
-                  marginTop: '8px',
-                  padding: '6px',
-                  backgroundColor: '#fffbf0',
-                  border: '1px solid #ffd54f',
-                  borderRadius: '4px'
-                }}>
-                  💡 <strong>Tip:</strong> You can modify any structure after applying it by adding/removing nodes and connections.
+                  
+                  {/* Visual Preview */}
+                  <div style={{ 
+                    padding: '15px',
+                    backgroundColor: 'white',
+                    position: 'relative',
+                    height: '120px',
+                    overflow: 'hidden'
+                  }}>
+                    <svg 
+                      width="100%" 
+                      height="100%" 
+                      viewBox="0 0 300 100"
+                      style={{ 
+                        border: '1px solid #f0f0f0',
+                        borderRadius: '4px',
+                        backgroundColor: '#fefefe'
+                      }}
+                    >
+                      {/* Draw edges first */}
+                      {dag.edges.map((edge, edgeIndex) => {
+                        const sourceNodeIndex = dag.nodes.findIndex(n => n.id === edge.source);
+                        const targetNodeIndex = dag.nodes.findIndex(n => n.id === edge.target);
+                        
+                        if (sourceNodeIndex === -1 || targetNodeIndex === -1) return null;
+                        
+                        // Check if source or target node is not in user's actual data
+                        const sourceNode = dag.nodes[sourceNodeIndex];
+                        const targetNode = dag.nodes[targetNodeIndex];
+                        const isSourceInUserData = fileSchema.includes(sourceNode.id);
+                        const isTargetInUserData = fileSchema.includes(targetNode.id);
+                        
+                        // Check if source or target is a confounder
+                        const getNodeType = (nodeId: string, nodeLabel?: string) => {
+                          const id = nodeLabel || nodeId;
+                          if (columnInterpretation && columnInterpretation[id]) {
+                            return columnInterpretation[id].type;
+                          }
+                          return guessVariableType(id);
+                        };
+                        
+                        const isSourceConfounder = getNodeType(sourceNode.id, sourceNode.label) === 'confounder';
+                        const isTargetConfounder = getNodeType(targetNode.id, targetNode.label) === 'confounder';
+                        
+                        // Use dashed line ONLY if EITHER source OR target is a confounder
+                        // Mediators and other theoretical variables should use solid lines for causal pathways
+                        const shouldUseDashedLine = isSourceConfounder || isTargetConfounder;
+                        
+                        // Simple layout: distribute nodes horizontally
+                        const nodeWidth = 280 / Math.max(dag.nodes.length, 3);
+                        const sourceX = 20 + sourceNodeIndex * nodeWidth;
+                        const targetX = 20 + targetNodeIndex * nodeWidth;
+                        const y = 50;
+                        
+                        // Create curved path for better visualization
+                        const midX = (sourceX + targetX) / 2;
+                        const midY = sourceX < targetX ? y - 20 : y + 20;
+                        
+                        return (
+                          <path
+                            key={edgeIndex}
+                            d={`M ${sourceX} ${y} Q ${midX} ${midY} ${targetX} ${y}`}
+                            stroke="#666"
+                            strokeWidth="1.5"
+                            strokeDasharray={shouldUseDashedLine ? "4,3" : "none"}
+                            fill="none"
+                            markerEnd={`url(#arrow-${index})`}
+                          />
+                        );
+                      })}
+                      
+                      {/* Draw nodes */}
+                      {dag.nodes.map((node, nodeIndex) => {
+                        const nodeWidth = 280 / Math.max(dag.nodes.length, 3);
+                        const x = 20 + nodeIndex * nodeWidth;
+                        const y = 50;
+                        
+                        // Check if node is in user's actual data
+                        const isInUserData = fileSchema.includes(node.id);
+                        
+                        // Different sizes for user data vs theoretical variables
+                        const nodeRadius = isInUserData ? 18 : 12;
+                        const fontSize = isInUserData ? 9 : 7;
+                        const fontWeight = isInUserData ? "bold" : "normal";
+                        
+                        // Color scheme: User data = blue, Theoretical = different colors by type
+                        let nodeColor;
+                        if (isInUserData) {
+                          // All user-provided columns use the same blue color
+                          nodeColor = '#1976d2'; // Strong blue for user data
+                        } else {
+                          // Theoretical variables use different colors by type
+                          const varType = guessVariableType(node.label);
+                          nodeColor = {
+                            'treatment': '#42a5f5',      // Light blue
+                            'outcome': '#ef5350',        // Red
+                            'confounder': '#ff9800',     // Orange
+                            'seasonality': '#ffb74d',    // Light orange
+                            'competitor': '#8d6e63',     // Brown
+                            'economic_activity': '#78909c', // Blue grey
+                            'unknown': '#9e9e9e'         // Grey
+                          }[varType] || '#9e9e9e';       // Default grey
+                        }
+                        
+                        // Check if this node is a confounder
+                        const nodeType = columnInterpretation && columnInterpretation[node.label] 
+                          ? columnInterpretation[node.label].type 
+                          : guessVariableType(node.label);
+                        const isConfounder = nodeType === 'confounder';
+                        
+                        return (
+                          <g key={nodeIndex}>
+                            <circle
+                              cx={x}
+                              cy={y}
+                              r={nodeRadius}
+                              fill={nodeColor}
+                              stroke="white"
+                              strokeWidth={isInUserData ? "3" : "2"}
+                              strokeDasharray={isConfounder ? "4,2" : "none"}
+                            />
+                            <text
+                              x={x}
+                              y={y + nodeRadius + 8}
+                              textAnchor="middle"
+                              fontSize={fontSize}
+                              fill="#333"
+                              fontWeight={fontWeight}
+                            >
+                              {node.label.length > 8 ? node.label.substring(0, 8) + '...' : node.label}
+                            </text>
+                            {/* Add indicator for theoretical variables */}
+                            {!isInUserData && (
+                              <text
+                                x={x}
+                                y={y + 3}
+                                textAnchor="middle"
+                                fontSize="8"
+                                fill="white"
+                                fontWeight="bold"
+                              >
+                                ?
+                              </text>
+                            )}
+                          </g>
+                        );
+                      })}
+                      
+                      {/* Arrow marker definition */}
+                      <defs>
+                        <marker
+                          id={`arrow-${index}`}
+                          viewBox="0 0 10 10"
+                          refX="9"
+                          refY="3"
+                          markerWidth="6"
+                          markerHeight="6"
+                          orient="auto"
+                        >
+                          <path d="M0,0 L0,6 L9,3 z" fill="#666"/>
+                        </marker>
+                      </defs>
+                    </svg>
+                  </div>
+                  
+                  {/* Apply Button */}
+                  <div style={{ 
+                    padding: '12px',
+                    backgroundColor: '#f5f5f5',
+                    borderTop: '1px solid #e0e0e0'
+                  }}>
+                    <button
+                      onClick={() => applyRecommendedDAG(dag)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 16px',
+                        backgroundColor: '#2196f3',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1976d2'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#2196f3'}
+                    >
+                      应用此结构
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
-          ) : (
-            // Show default node templates
-            nodeTemplates.map((template) => (
-              <div
-                key={template.type}
-                draggable
-                onDragStart={(event) => onDragStart(event, template.type)}
-                style={{
-                  ...template.style,
-                  margin: '8px 0',
-                  cursor: 'grab',
-                  userSelect: 'none',
-                  textAlign: 'center',
-                  transition: 'transform 0.2s',
-                }}
-                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
-                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-              >
-                <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{template.label}</div>
-                <div style={{ fontSize: '10px', opacity: 0.8, marginTop: '2px' }}>
-                  {template.description}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+            
+            <div style={{ 
+              fontSize: '9px', 
+              color: '#666', 
+              marginTop: '12px',
+              padding: '8px',
+              backgroundColor: '#fffbf0',
+              border: '1px solid #ffd54f',
+              borderRadius: '4px'
+            }}>
+              💡 <strong>提示：</strong> 应用任何结构后，你都可以通过添加/删除节点和连接来修改它。
+            </div>
+            
+            {/* Legend for DAG visualization */}
+            <div style={{ 
+              fontSize: '9px', 
+              color: '#666', 
+              marginTop: '8px',
+              padding: '8px',
+              backgroundColor: '#f0f7ff',
+              border: '1px solid #2196f3',
+              borderRadius: '4px'
+            }}>
+              <strong>🔍 图例说明：</strong><br />
+              <span style={{ fontSize: '8px' }}>
+                • <strong>实线节点/边</strong>：你数据中实际存在的变量<br />
+                • <strong>虚线节点/边</strong>：理论上的混淆变量（建议考虑但可能未测量）<br />
+                • <strong>? 标记</strong>：表示该变量在你的数据中不存在，但对因果推断很重要
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Operation buttons */}
         <div style={{ marginBottom: '25px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Operations</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button
-              onClick={deleteSelected}
-              disabled={selectedNodes.length === 0 && selectedEdges.length === 0}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: selectedNodes.length > 0 || selectedEdges.length > 0 ? '#f44336' : '#e0e0e0',
-                color: selectedNodes.length > 0 || selectedEdges.length > 0 ? 'white' : '#999',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: selectedNodes.length > 0 || selectedEdges.length > 0 ? 'pointer' : 'not-allowed',
-                fontSize: '12px'
-              }}
-            >
-              Delete Selected (Delete Key)
-            </button>
-            <button
-              onClick={clearCanvas}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#ff9800',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              Clear Canvas
-            </button>
           </div>
         </div>
 
@@ -1425,20 +1844,12 @@ function App() {
                       🔵 {fileSchema.filter(col => guessVariableType(col) === 'treatment').length} Treatment(s) • 
                       🔴 {fileSchema.filter(col => guessVariableType(col) === 'outcome').length} Outcome(s) • 
                       🟠 {fileSchema.filter(col => guessVariableType(col) === 'confounder').length} Confounder(s) • 
-                      🟢 {fileSchema.filter(col => guessVariableType(col) === 'mediator').length} Other(s)
+                      ⚪ {fileSchema.filter(col => guessVariableType(col) === 'unknown').length} Unknown
                     </div>
                   )}
                 </div>
               )}
               
-              <div style={{ fontSize: '10px', color: '#666', marginTop: '8px' }}>
-                <strong>Expected CSV format:</strong>
-                <br />• Date column (e.g., 'date_week', 'date')
-                <br />• Target variable (e.g., 'y', 'sales', 'revenue')
-                <br />• Marketing channels (e.g., 'x1', 'x2', 'social_media', 'search')
-                <br /><br />
-                <strong>💡 Tip:</strong> After uploading, the Node Toolbox will show your actual column names for easy DAG building!
-              </div>
             </div>
           )}
         </div>
@@ -1965,38 +2376,264 @@ function App() {
           )}
         </div>
 
-        {/* Documentation */}
-        <div style={{ fontSize: '11px', color: '#666', lineHeight: '1.5' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Instructions</h4>
-          <ul style={{ margin: 0, paddingLeft: '15px' }}>
-            <li>Drag nodes to canvas to add new nodes</li>
-            <li>Drag node edge dots to create connections</li>
-            <li>Click to select nodes or edges</li>
-            <li>Press Delete key to delete selected elements</li>
-            <li>Drag to move node positions</li>
-            <li>Click Train Model after designing DAG</li>
-          </ul>
-        </div>
+        {/* Column Interpretation and Causal Analysis */}
+        {fileSchema && columnInterpretation && (
+          <div style={{ marginTop: '12px' }}>
+            {!isInterpretationConfirmed ? (
+              // Step 1: Column Interpretation
+              <div>
+                <div style={{ 
+                  fontSize: '12px', 
+                  fontWeight: 'bold',
+                  color: '#1976d2',
+                  marginBottom: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  🤖 AI分析：请确认列的含义
+                  <span style={{ fontSize: '10px', color: '#666', fontWeight: 'normal' }}>
+                    (可修改)
+                  </span>
+                </div>
+                
+                <div style={{ 
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  marginBottom: '12px'
+                }}>
+                  {Object.entries(columnInterpretation).map(([column, info]) => (
+                    <div key={column} style={{
+                      padding: '8px',
+                      margin: '4px 0',
+                      backgroundColor: info.confidence > 0.7 ? '#e8f5e8' : 
+                                     info.confidence > 0.5 ? '#fff3e0' : '#ffebee',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '4px',
+                      fontSize: '10px'
+                    }}>
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'space-between',
+                        marginBottom: '4px'
+                      }}>
+                        <strong style={{ color: '#333' }}>{column}</strong>
+                        <span style={{ 
+                          fontSize: '8px', 
+                          color: '#666',
+                          backgroundColor: '#f5f5f5',
+                          padding: '2px 6px',
+                          borderRadius: '10px'
+                        }}>
+                          {Math.round(info.confidence * 100)}% 确信度
+                        </span>
+                      </div>
+                      
+                      <div style={{ color: '#666', marginBottom: '6px' }}>
+                        {info.description}
+                      </div>
+                      
+                      <select
+                        value={info.type}
+                        onChange={(e) => updateColumnInterpretation(column, e.target.value)}
+                        style={{
+                          fontSize: '9px',
+                          padding: '2px 4px',
+                          border: '1px solid #ddd',
+                          borderRadius: '3px',
+                          backgroundColor: 'white',
+                          width: '100%'
+                        }}
+                      >
+                        <option value="treatment">Treatment (营销/干预变量)</option>
+                        <option value="outcome">Outcome (结果变量)</option>
+                        <option value="confounder">Confounder (混淆因子)</option>
+                        <option value="time">Time (时间变量)</option>
+                        <option value="unknown">Unknown (未知类型)</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                
+                <button
+                  onClick={confirmInterpretation}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    backgroundColor: '#4caf50',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  ✅ 确认分析，生成因果建议
+                </button>
+              </div>
+            ) : (
+              // Step 2: Causal Analysis Results
+              <div>
+                <div style={{ 
+                  fontSize: '12px', 
+                  fontWeight: 'bold',
+                  color: '#2e7d32',
+                  marginBottom: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  ✅ 因果分析完成
+                  <button
+                    onClick={() => {
+                      setIsInterpretationConfirmed(false);
+                      setCausalAnalysis(null);
+                    }}
+                    style={{
+                      fontSize: '8px',
+                      padding: '2px 6px',
+                      backgroundColor: '#ff9800',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '10px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    重新分析
+                  </button>
+                </div>
+                
+                {causalAnalysis && (
+                  <div style={{
+                    maxHeight: '250px',
+                    overflowY: 'auto',
+                    padding: '10px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #e9ecef',
+                    borderRadius: '4px',
+                    fontSize: '9px',
+                    lineHeight: '1.4',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {causalAnalysis}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Main Canvas Area */}
-      <div ref={reactFlowWrapper} style={{ flex: 1 }}>
+      {/* Draggable Splitter */}
+      <div
+        style={{
+          width: '6px',
+          background: isDragging ? '#2196f3' : '#ddd',
+          cursor: 'col-resize',
+          flexShrink: 0,
+          position: 'relative',
+          transition: isDragging ? 'none' : 'background 0.2s',
+        }}
+        onMouseDown={handleMouseDown}
+      >
+        {/* Visual indicator */}
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '2px',
+            height: '30px',
+            background: isDragging ? '#ffffff' : '#999',
+            borderRadius: '1px',
+            opacity: 0.7,
+          }}
+        />
+      </div>
+
+      {/* Main canvas area */}
+      <div ref={reactFlowWrapper} style={{ 
+        flex: 1, // Takes remaining space
+        position: 'relative' 
+      }}>
         <ReactFlow
-          nodes={nodes.map(node => ({
-            ...node,
-            style: {
-              ...node.style,
-              boxShadow: selectedNodes.includes(node.id) ? '0 0 0 2px #2196f3' : 'none'
+          nodes={nodes.map(node => {
+            // Check if node is in user's uploaded data schema
+            let isInUserData = true;
+            if (fileSchema) {
+              isInUserData = fileSchema.includes(node.id) || fileSchema.includes(node.data?.label);
             }
-          }))}
-          edges={edges.map(edge => ({
-            ...edge,
-            style: {
-              ...edge.style,
-              stroke: selectedEdges.includes(edge.id) ? '#2196f3' : edge.style?.stroke,
-              strokeWidth: selectedEdges.includes(edge.id) ? 3 : edge.style?.strokeWidth || 2
+            
+            // Check if this node is a confounder for border styling
+            const nodeId = node.data?.label || node.id;
+            const nodeType = columnInterpretation && columnInterpretation[nodeId] 
+              ? columnInterpretation[nodeId].type 
+              : guessVariableType(nodeId);
+            const isConfounder = nodeType === 'confounder';
+            
+            // Apply confounder border styling
+            const confounderStyle = isConfounder ? {
+              borderStyle: 'dashed',
+              borderWidth: '2px'
+            } : {};
+            
+            return {
+              ...node,
+              style: {
+                ...node.style,
+                ...confounderStyle,
+                boxShadow: selectedNodes.includes(node.id) ? '0 0 0 2px #2196f3' : 'none'
+              }
+            };
+          })}
+          edges={edges.map(edge => {
+            // Check if source and target nodes are in user's uploaded data schema
+            const sourceNode = nodes.find(n => n.id === edge.source);
+            const targetNode = nodes.find(n => n.id === edge.target);
+            
+            let isSourceInUserData = true;
+            let isTargetInUserData = true;
+            
+            if (fileSchema && sourceNode) {
+              isSourceInUserData = fileSchema.includes(sourceNode.id) || fileSchema.includes(sourceNode.data?.label);
             }
-          }))}
+            
+            if (fileSchema && targetNode) {
+              isTargetInUserData = fileSchema.includes(targetNode.id) || fileSchema.includes(targetNode.data?.label);
+            }
+            
+            // Check if source or target is a confounder
+            const getNodeType = (nodeId: string, nodeLabel?: string) => {
+              const id = nodeLabel || nodeId;
+              if (columnInterpretation && columnInterpretation[id]) {
+                return columnInterpretation[id].type;
+              }
+              return guessVariableType(id);
+            };
+            
+            const isSourceConfounder = getNodeType(edge.source, edge.source) === 'confounder';
+            const isTargetConfounder = getNodeType(edge.target, edge.target) === 'confounder';
+            
+            // Use dashed line ONLY if EITHER source OR target is a confounder
+            // Mediators and other theoretical variables should use solid lines for causal pathways
+            const shouldUseDashedLine = isSourceConfounder || isTargetConfounder;
+            
+            // Make user data connections more prominent
+            const strokeWidth = isSourceInUserData && isTargetInUserData ? 3 : 2;
+            
+            return {
+              ...edge,
+              style: {
+                ...edge.style,
+                stroke: selectedEdges.includes(edge.id) ? '#2196f3' : edge.style?.stroke,
+                strokeWidth: selectedEdges.includes(edge.id) ? 4 : strokeWidth,
+                strokeDasharray: shouldUseDashedLine ? '8,4' : 'none'
+              }
+            };
+          })}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
