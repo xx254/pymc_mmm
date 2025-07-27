@@ -47,7 +47,8 @@ except ImportError:
 # Ensure all necessary packages can be imported correctly
 try:
     import preliz as pz
-    from pymc_marketing.mmm import MMM, GeometricAdstock, MichaelisMentenSaturation
+    from pymc_marketing.mmm import GeometricAdstock, MichaelisMentenSaturation
+    from pymc_marketing.mmm import MMM  # 直接使用原始MMM类
     from pymc_marketing.mmm.transformers import geometric_adstock, michaelis_menten
     from pymc_marketing.prior import Prior
     PYMC_MARKETING_AVAILABLE = True
@@ -166,13 +167,9 @@ class CausalMMMTutorial:
         
         # 设置采样参数
         self.sample_kwargs = {
-            "draws": 1000,       # 增加采样次数以提高有效样本量
-            "tune": 1000,        # 增加调优步数以提高收敛性
+            "draws": 500,        # 设置采样次数
             "chains": 4,         # 保持4条链以确保收敛诊断
-            "nuts_sampler": "numpyro",  # 使用更快的numpyro采样器
-            "target_accept": 0.9,  # 稍微降低目标接受率以加快收敛
-            "return_inferencedata": True,
-            "random_seed": 42    # 使用整数种子
+            "nuts_sampler": "numpyro"  # 使用更快的numpyro采样器
         }
         
         # 尝试加载真实数据
@@ -776,20 +773,130 @@ class CausalMMMTutorial:
         self.df["holiday_contributions"] = holiday_contributions
         
     def _extract_control_variables_from_dag(self, dag_string):
-        """从DAG字符串中提取控制变量"""
-        control_variables = []
+        """Extract control variables from DAG
         
-        # 解析DAG字符串，查找可能的控制变量
-        # 控制变量通常是指向x1, x2, y的外生变量
+        Args:
+            dag_string: String representation of DAG
+            
+        Returns:
+            List of control variable names
+        """
+        edges = self._parse_dag_structure(dag_string)
+        direct_causes = self._get_direct_causes(edges)
+        mediators = self._get_mediators(edges)
         
+        # Control variables are direct causes of y that are not treatment variables
+        # or their mediators
+        control_vars = []
+        if 'y' in direct_causes:
+            control_vars = [var for var in direct_causes['y'] 
+                          if var not in ['x1', 'x2'] and 
+                          var not in mediators.get('y', [])]
+        return control_vars
+    
+    def _parse_dag_structure(self, dag_string):
+        """Parse DAG string to extract edges
+        
+        Args:
+            dag_string: String representation of DAG
+            
+        Returns:
+            List of tuples (source, target)
+        """
         import re
-        # 查找所有边关系 (source -> target)
         edge_pattern = r'(\w+)\s*->\s*(\w+)'
         edges = re.findall(edge_pattern, dag_string)
+        return [(source.strip(), target.strip()) for source, target in edges]
         
-        # 收集所有指向处理变量(x1, x2)和结果变量(y)的变量
-        sources_to_treatments = set()
-        sources_to_outcome = set()
+    def _get_direct_causes(self, edges):
+        """Get direct causes for each variable
+        
+        Args:
+            edges: List of tuples (source, target)
+            
+        Returns:
+            Dict mapping variables to their direct causes
+        """
+        causes = {}
+        for source, target in edges:
+            if target not in causes:
+                causes[target] = []
+            causes[target].append(source)
+        return causes
+        
+    def _get_mediators(self, edges):
+        """Identify mediator variables
+        
+        Args:
+            edges: List of tuples (source, target)
+            
+        Returns:
+            Dict mapping variables to their mediators
+        """
+        # First build adjacency list
+        adj = {}
+        for source, target in edges:
+            if source not in adj:
+                adj[source] = set()
+            adj[source].add(target)
+            
+        def find_paths(start, end, path=None):
+            if path is None:
+                path = [start]
+            if start == end:
+                return [path]
+            if start not in adj:
+                return []
+            paths = []
+            for next_node in adj[start]:
+                if next_node not in path:
+                    new_paths = find_paths(next_node, end, path + [next_node])
+                    paths.extend(new_paths)
+            return paths
+            
+            paths = []
+            for next_node in adj[start]:
+                if next_node not in path:  # Avoid cycles
+                    new_paths = find_paths(next_node, end, path + [next_node])
+                    paths.extend(new_paths)
+            return paths
+            
+        # Find mediators between treatment variables and outcome
+        mediators = {}
+        treatments = ['x1', 'x2']
+        outcome = 'y'
+        
+        for treatment in treatments:
+            # Find all paths from treatment to outcome
+            paths = find_paths(treatment, outcome)
+            
+            # Extract mediators (nodes between treatment and outcome)
+            for path in paths:
+                if len(path) > 2:  # If path has intermediate nodes
+                    path_mediators = path[1:-1]  # All nodes except start and end
+                    if outcome not in mediators:
+                        mediators[outcome] = set()
+                    mediators[outcome].update(path_mediators)
+                    
+        # Convert sets to lists for easier handling
+        mediators = {}
+        treatments = ['x1', 'x2']
+        outcome = 'y'
+        
+        for treatment in treatments:
+            # Find all paths from treatment to outcome
+            paths = find_paths(treatment, outcome)
+            
+            # Extract mediators (nodes between treatment and outcome)
+            if outcome not in mediators:
+                mediators[outcome] = set()
+            
+            for path in paths:
+                if len(path) > 2:
+                    # Add all intermediate nodes as mediators
+                    mediators[outcome].update(path[1:-1])
+                    
+        return {k: list(v) for k, v in mediators.items()}
         
         for source, target in edges:
             if target in ['x1', 'x2']:
@@ -918,6 +1025,8 @@ class CausalMMMTutorial:
     def plot_data_overview(self):
         """绘制数据概览"""
         if self.df is None:
+            print("⚠️ 无数据可供绘图")
+            return
             print("请先生成数据")
             return
             
@@ -961,14 +1070,11 @@ class CausalMMMTutorial:
         plt.savefig("data_overview.png", dpi=300, bbox_inches='tight')
         plt.show()
         
-    def run_correlational_model(self):
-        """运行相关性模型"""
-        if not PYMC_MARKETING_AVAILABLE:
-            print("跳过相关性模型 - PyMC-Marketing不可用")
-            return None
-            
-        print("\n6. 相关性模型:")
-        print("首先，我们运行一个简单的相关性模型，不考虑因果关系...")
+    def plot_data_overview_end(self):
+        """End of plot_data_overview method"""
+        plt.tight_layout()
+        plt.savefig("data_overview.png", dpi=300, bbox_inches='tight')
+        plt.show()
         
         X = self.data.drop("y", axis=1)
         y = self.data["y"]
@@ -1045,6 +1151,133 @@ class CausalMMMTutorial:
             print("Skipping causal model - PyMC-Marketing not available")
             return None
             
+        try:
+            # Prepare data
+            X = self.data.drop("y", axis=1)
+            y = self.data["y"]
+            
+            # Determine which DAG to use and corresponding configuration
+            if custom_dag is not None:
+                causal_dag = custom_dag
+                print("🔍 Using user-defined DAG from UI...")
+                # For custom DAG, use conservative settings similar to notebook example 1
+                use_time_varying_intercept = False
+                control_columns = ["holiday_signal"] if "holiday_signal" in X.columns else None
+            else:
+                # Define default causal DAG based on version - matching notebook examples
+                if version == "full":
+                    # Complex DAG similar to notebook example 2 (R² = 0.99)
+                    causal_dag = """
+                    digraph {
+                        x1 -> y;
+                        x2 -> y;
+                        x1 -> x2;
+                        holiday_signal -> y;
+                        holiday_signal -> x1;
+                        holiday_signal -> x2;
+                    }
+                    """
+                    use_time_varying_intercept = True  # Key difference!
+                    control_columns = ["holiday_signal"] if "holiday_signal" in X.columns else None
+                    
+                elif version == "simple":
+                    # Simple DAG similar to notebook example 1 (R² = 0.84)
+                    causal_dag = """
+                    digraph {
+                        x1 -> y;
+                        x2 -> y;
+                        holiday_signal -> y;
+                        holiday_signal -> x1;
+                        holiday_signal -> x2;
+                    }
+                    """
+                    use_time_varying_intercept = False  # Key difference!
+                    control_columns = ["holiday_signal"] if "holiday_signal" in X.columns else None
+                    
+                else:
+                    # Minimal DAG
+                    causal_dag = """
+                    digraph {
+                        x1 -> y;
+                        x2 -> y;
+                    }
+                    """
+                    use_time_varying_intercept = False
+                    control_columns = None
+                    
+                print(f"🔍 Using default DAG for version: {version}")
+            
+            print(f"🔍 Using DAG structure:\n{causal_dag}")
+            print(f"🔍 Time varying intercept: {use_time_varying_intercept}")
+            print(f"🔍 Control columns: {control_columns}")
+            
+            # Create causal MMM matching notebook pattern exactly
+            print("🔍 Creating causal MMM model with DAG constraints...")
+            causal_mmm = MMM(
+                sampler_config=self.sample_kwargs,
+                date_column="date",
+                adstock=GeometricAdstock(l_max=24),
+                saturation=MichaelisMentenSaturation(),
+                channel_columns=["x1", "x2"],
+                control_columns=control_columns,  # 明确指定控制变量，就像notebook中一样
+                # Define the outcome node and the causal DAG
+                outcome_node="y",
+                dag=causal_dag,
+                # Time varying intercept - 根据DAG复杂度决定
+                time_varying_intercept=use_time_varying_intercept,
+            )
+            
+            # Apply model configuration - 根据notebook例子
+            if use_time_varying_intercept:
+                # Complex model configuration (like notebook example 2)
+                causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
+                causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
+                print("🔍 Applied complex model configuration (time-varying intercept)")
+            else:
+                # Simple model configuration (like notebook example 1)
+                print("🔍 Using simple model configuration (no time-varying intercept)")
+            
+            # Display causal analysis results
+            if hasattr(causal_mmm, 'causal_graphical_model') and causal_mmm.causal_graphical_model is not None:
+                print(f"✅ Causal graphical model created successfully!")
+                
+                try:
+                    # Access adjustment sets
+                    adjustment_set = causal_mmm.causal_graphical_model.adjustment_set
+                    minimal_adjustment_set = causal_mmm.causal_graphical_model.minimal_adjustment_set
+                    
+                    print(f"🔍 Adjustment set: {adjustment_set}")
+                    print(f"🔍 Minimal adjustment set: {minimal_adjustment_set}")
+                    
+                except AttributeError as e:
+                    print(f"⚠️ Could not access adjustment sets: {e}")
+                    
+                print(f"🔍 Final control columns: {causal_mmm.control_columns}")
+                
+            else:
+                print("⚠️ No causal graphical model created - running as standard MMM")
+            
+            # Train model
+            print("🔍 Training causal model with DAG constraints...")
+            target_accept = 0.95 if use_time_varying_intercept else 0.90  # 匹配notebook
+            causal_mmm.fit(X=X, y=y, target_accept=target_accept, random_seed=42)
+            
+            print("🔍 Generating posterior predictions...")
+            causal_mmm.sample_posterior_predictive(
+                X, extend_idata=True, combined=True, random_seed=42
+            )
+            
+            # Check divergences
+            divergences = causal_mmm.idata["sample_stats"]["diverging"].sum().item()
+            print(f"Causal model divergences: {divergences}")
+            
+            return causal_mmm
+            
+        except Exception as e:
+            print(f"Error in run_causal_model: {str(e)}")
+            traceback.print_exc()
+            return None
+            
         print(f"\n7. Causal model ({version}):")
         
         try:
@@ -1055,13 +1288,12 @@ class CausalMMMTutorial:
             print(f"🔍 Feature columns (X): {list(X.columns)}")
             print(f"🔍 Target column shape: {y.shape}")
             
-            # Use custom DAG if provided, otherwise use default DAG
+            # Parse and validate DAG structure
             if custom_dag is not None:
                 causal_dag = custom_dag
                 print("Using user-defined DAG from UI drag-and-drop...")
-                print(f"User DAG: {causal_dag}")
             else:
-                # Define default causal DAG
+                # Define default causal DAG with all possible relationships
                 causal_dag = """
                 digraph {
                     x1 -> y;
@@ -1077,96 +1309,197 @@ class CausalMMMTutorial:
                 """
                 print("Using default DAG...")
             
-            # Determine available control columns from custom DAG
-            available_control_columns = []
+            # Extract DAG structure and determine causal relationships
+            causal_edges = self._parse_dag_structure(causal_dag)
+            print(f"🔍 Causal relationships: {causal_edges}")
             
-            if custom_dag is not None:
-                # Extract control variables from custom DAG
-                control_vars_from_dag = self._extract_control_variables_from_dag(custom_dag)
-                print(f"🔍 Control variables extracted from custom DAG: {control_vars_from_dag}")
-                
-                # Check which control variables are available in data
-                for col in control_vars_from_dag:
-                    if col in X.columns:
-                        available_control_columns.append(col)
-            else:
-                # Use default control variables
-                potential_controls = ["holiday_signal"]
-                for col in potential_controls:
-                    if col in X.columns:
-                        available_control_columns.append(col)
+            # Identify direct causes and mediators for each variable
+            direct_causes = self._get_direct_causes(causal_edges)
+            mediators = self._get_mediators(causal_edges)
+            print(f"🔍 Direct causes: {direct_causes}")
+            print(f"🔍 Mediators: {mediators}")
             
-            print(f"🔍 Available control columns: {available_control_columns}")
-            
-            # Create model configuration based on available control columns
-            mmm_config = {
-                "sampler_config": self.sample_kwargs,
-                "date_column": "date",
-                "adstock": GeometricAdstock(l_max=24),
-                "saturation": MichaelisMentenSaturation(),
-                "channel_columns": ["x1", "x2"],
-                "outcome_node": "y",
-                "time_varying_intercept": True,
+            # Adjust model configuration based on DAG structure
+            model_config = {
+                'target': 'y',
+                'features': [],
+                'controls': [],
+                'mediators': mediators.get('y', []),
+                'instrument_variables': []
             }
             
-            # Only add control_columns and dag if we have control variables AND they are not all zero
-            if available_control_columns:
-                # Check if control variables have non-zero variance
-                non_zero_controls = []
-                for col in available_control_columns:
-                    if col in X.columns and X[col].var() > 1e-10:  # Check if variance is not essentially zero
-                        non_zero_controls.append(col)
-                
-                if non_zero_controls:
-                    mmm_config["control_columns"] = non_zero_controls
-                    mmm_config["dag"] = causal_dag
-                    print(f"🔍 Using causal model with control variables and DAG: {non_zero_controls}")
-                else:
-                    print("🔍 Control variables have zero variance, using basic MMM model")
-                    print("⚠️ Note: Without valid control variables, this will be a standard correlational MMM model")
-            else:
-                print("🔍 Using basic MMM model without control variables (no DAG constraints)")
-                print("⚠️ Note: Without control variables, this will be a standard correlational MMM model")
+            # Add features and controls based on DAG structure
+            for var in direct_causes.get('y', []):
+                if var in X.columns:
+                    if var in ['x1', 'x2']:
+                        model_config['features'].append(var)
+                    else:
+                        model_config['controls'].append(var)
             
-            # Create model with appropriate configuration
-            causal_mmm = MMM(**mmm_config)
+            print(f"🔍 Model configuration based on DAG:\n{model_config}")
             
-            # Apply user-specified model configuration
-            causal_mmm.model_config["intercept_tvp_config"].ls_mu = 180
-            causal_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
+            # Get available columns from data that match DAG structure
+            available_features = [col for col in model_config['features'] if col in X.columns]
+            available_controls = [col for col in model_config['controls'] if col in X.columns]
+            available_mediators = [col for col in model_config['mediators'] if col in X.columns]
             
-            # Display adjustment sets (only if causal model with DAG)
-            if hasattr(causal_mmm, 'causal_graphical_model') and causal_mmm.causal_graphical_model is not None:
-                print(f"🔍 Adjustment set: {causal_mmm.causal_graphical_model.adjustment_set}")
-                print(f"🔍 Minimal adjustment set: {causal_mmm.causal_graphical_model.minimal_adjustment_set}")
-            else:
-                print("🔍 No causal graphical model (basic MMM mode without DAG constraints)")
+            print(f"🔍 Available features: {available_features}")
+            print(f"🔍 Available controls: {available_controls}")
+            print(f"🔍 Available mediators: {available_mediators}")
             
-            try:
-                # 使用固定的随机种子进行训练
-                causal_mmm.fit(X=X, y=y, target_accept=0.9, random_seed=42)
-                causal_mmm.sample_posterior_predictive(
-                    X, extend_idata=True, combined=True, random_seed=42
-                )
+            # Configure the model based on available data and DAG structure
+            config = {
+                'target_variable': 'y',
+                'features': available_features,
+                'control_variables': available_controls
+            }
+            
+            # Add model-specific configurations based on DAG complexity
+            if len(available_mediators) > 0:
+                config['mediator_variables'] = available_mediators
                 
-                # Check divergences
-                divergences = causal_mmm.idata["sample_stats"]["diverging"].sum().item()
-                print(f"Causal model divergences: {divergences}")
-                
-                return causal_mmm
-                
-            except Exception as e:
-                print(f"Model training failed: {str(e)}")
-                print("Detailed traceback:")
-                import traceback
-                print(traceback.format_exc())
-                return None
-                
+            # Configure priors based on DAG structure
+            prior_config = self._configure_priors_from_dag(causal_edges)
+            config.update(prior_config)
+            
+            # Adjust sampling parameters based on DAG complexity
+            n_edges = len(causal_edges)
+            self.sample_kwargs.update({
+                'draws': max(1000, 200 * n_edges),
+                'tune': max(1000, 200 * n_edges),
+                'target_accept': min(0.9, 0.8 + 0.1 * (1 - n_edges/10))
+            })
+            
+            # Initialize and train the model with DAG-aware configuration
+            mmm_model = OriginalMMM()
+            mmm_model.build(
+                y=y,
+                X=X[available_features],
+                controls=X[available_controls] if available_controls else None,
+                mediators=X[available_mediators] if available_mediators else None,
+                prior=prior_config['prior_configs'],
+                dag_structure=causal_edges
+            )
+            
+            # Fit the model with adjusted sampling parameters
+            trace = mmm_model.fit(**self.sample_kwargs)
+            
+            # Save model artifacts for later analysis
+            self.last_model = {
+                'model': mmm_model,
+                'trace': trace,
+                'config': config,
+                'dag_structure': causal_edges
+            }
+            
+            return self.last_model
+            
         except Exception as e:
             print(f"Error in run_causal_model: {str(e)}")
-            print("Detailed traceback:")
-            import traceback
-            print(traceback.format_exc())
+            traceback.print_exc()
+            return None
+            
+    def _configure_priors_from_dag(self, edges):
+        """Configure model priors based on DAG structure
+        
+        Args:
+            edges: List of tuples (source, target)
+            
+        Returns:
+            Dict with prior configurations
+        """
+        # Build graph structure
+        graph = {}
+        for source, target in edges:
+            if source not in graph:
+                graph[source] = []
+            graph[source].append(target)
+            
+        # Initialize prior configurations
+        prior_config = {
+            'prior_configs': {}
+        }
+        
+        # Configure priors for different variable types
+        for var in ['x1', 'x2']:
+            if var in graph:
+                # Variable has causal effects
+                prior_config['prior_configs'][var] = {
+                    'mean': 0.5,  # Moderate positive effect expected
+                    'sd': 0.25,   # Allow for uncertainty
+                    'shape': 'half_normal'  # Non-negative effects
+                }
+            else:
+                # Variable has no causal effects
+                prior_config['prior_configs'][var] = {
+                    'mean': 0.0,  # No effect expected
+                    'sd': 0.1,    # Small uncertainty
+                    'shape': 'normal'
+                }
+                
+        # Configure interaction terms if both x1 and x2 affect the same target
+        if 'x1' in graph and 'x2' in graph:
+            common_targets = set(graph['x1']).intersection(set(graph['x2']))
+            if common_targets:
+                prior_config['interaction_config'] = {
+                    'enabled': True,
+                    'prior': {
+                        'mean': 0.0,
+                        'sd': 0.1,
+                        'shape': 'normal'
+                    }
+                }
+                
+        return prior_config
+        
+    def run_correlational_model(self):
+        """Run correlational model (standard MMM without causal constraints)"""
+        try:
+            # Prepare data
+            X = self.data.drop("y", axis=1)
+            y = self.data["y"]
+            
+            # Create correlational MMM using the same pattern as causal model but without DAG
+            print("🔍 Creating standard MMM model (no causal constraints)...")
+            correlational_mmm = MMM(
+                sampler_config=self.sample_kwargs,
+                date_column="date",
+                adstock=GeometricAdstock(l_max=24),
+                saturation=MichaelisMentenSaturation(),
+                channel_columns=["x1", "x2"],
+                control_columns=["holiday_signal"] if "holiday_signal" in X.columns else None,
+                # Time varying intercept (but no DAG constraints)
+                time_varying_intercept=True,
+                # Note: No dag, outcome_node, or treatment_nodes parameters
+                # This makes it a standard correlational MMM
+            )
+            
+            # Apply model configuration
+            correlational_mmm.model_config["intercept_tvp_config"].ls_mu = 180
+            correlational_mmm.model_config["intercept"] = Prior("Normal", mu=1, sigma=2)
+            
+            # Verify this is not a causal model
+            if hasattr(correlational_mmm, 'causal_graphical_model') and correlational_mmm.causal_graphical_model is not None:
+                print("⚠️ Warning: Causal graphical model detected in correlational model")
+            else:
+                print("✅ Standard correlational MMM model created (no DAG constraints)")
+            
+            # Train model with fixed random seed
+            print("🔍 Training correlational model...")
+            correlational_mmm.fit(X=X, y=y, target_accept=0.9, random_seed=42)
+            correlational_mmm.sample_posterior_predictive(
+                X, extend_idata=True, combined=True, random_seed=42
+            )
+            
+            # Check divergences
+            divergences = correlational_mmm.idata["sample_stats"]["diverging"].sum().item()
+            print(f"Correlational model divergences: {divergences}")
+            
+            return correlational_mmm
+            
+        except Exception as e:
+            print(f"Error in correlational_model: {str(e)}")
+            traceback.print_exc()
             return None
             
     def compare_models(self, correlational_mmm, causal_mmm):
